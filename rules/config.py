@@ -68,8 +68,9 @@ class ReferenceMapping(_Frozen):
 
 
 class LLMConfig(_Frozen):
-    model: str = "claude-haiku-4-5"
-    timeout_s: float = Field(20, gt=0)
+    model: str = "qwen2.5:3b"
+    base_url: str = "http://127.0.0.1:11434"
+    timeout_s: float = Field(120, gt=0)
     max_tokens: int = Field(150, ge=1)
     price_eur_per_input_token: float = Field(ge=0)
     price_eur_per_output_token: float = Field(ge=0)

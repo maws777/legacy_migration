@@ -30,12 +30,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip)
 
 
-@pytest.fixture(autouse=True)
-def _no_real_llm_key(monkeypatch):
-    """No test may reach the real LLM provider: the key is removed unless a test sets a fake one."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-
 @pytest.fixture(scope="session")
 def cfg():
     from rules.config import load_rule_config

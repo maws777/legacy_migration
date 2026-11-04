@@ -8,12 +8,13 @@ discovery_sample_size: 20
 # (closed dictionaries only, decisions.md). Other fields always go to a human.
 resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
 llm:
-  model: claude-haiku-4-5
-  timeout_s: 20
+  model: qwen2.5:3b
+  base_url: http://127.0.0.1:11434
+  timeout_s: 120
   max_tokens: 150
-  # Approximate Claude Haiku 4.5 list prices (USD 1 / 5 per million tokens) converted to EUR.
-  price_eur_per_input_token: 0.00000092
-  price_eur_per_output_token: 0.0000046
+  # Local inference has no provider token charge; electricity is not included.
+  price_eur_per_input_token: 0
+  price_eur_per_output_token: 0
 control_sample:
   size: 50
   seed: 42

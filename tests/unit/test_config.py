@@ -24,6 +24,9 @@ def test_defaults_and_dictionaries():
     p = cfg.pipeline
     assert p.confidence_threshold == 0.9
     assert p.batch_size == 1000
+    assert p.llm.model == "qwen2.5:3b"
+    assert p.llm.base_url == "http://127.0.0.1:11434"
+    assert p.llm.timeout_s == 120
     assert p.discovery_sample_size == 20
     assert p.legacy_b.seed == 2026 and p.legacy_b.conflicts == 15
     assert p.control_sample.size == 50

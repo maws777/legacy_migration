@@ -1,6 +1,6 @@
 # Demo scenario
 
-Each step gives the exact PowerShell command and the expected result. The results below were observed on 4 November 2026 with the services started by `scripts/start_all.ps1`, without `ANTHROPIC_API_KEY` (Degraded_Mode) and with the Legacy_B_API running. run_ids and timestamps differ on every run; counts do not.
+Each step gives the exact PowerShell command and the expected result. The results below were observed on 4 November 2026, before the Ollama migration, with the services started by `scripts/start_all.ps1`, without a configured local Ollama model (Degraded_Mode) and with the Legacy_B_API running. run_ids and timestamps differ on every run; counts do not.
 
 Every API step also exists in the UI (http://127.0.0.1:8501): Home (campaigns), Stats, Questions, Decision log, Phases.
 

@@ -31,7 +31,7 @@ Requirements 11 and 12 read Legacy B models only through the read-only Legacy_B_
 
 - **A1 [CONFIRMED]** Stack: Python 3.11, FastAPI + uvicorn, SQLAlchemy 2.x, pandas, LangGraph, Streamlit, pytest + hypothesis. LangGraph is used only for the Run_Workflow (one node processes a batch or a Pattern_Key, never a single row; the workflow pauses for human answers; checkpoints are stored in SQLite) and for the Query_Agent.
 - **A2 [CONFIRMED]** Target_DB: SQLite through SQLAlchemy, CHECK constraints, `PRAGMA foreign_keys=ON`. The schema uses only column types and SQL constructs portable to PostgreSQL; no test is run on PostgreSQL.
-- **A3 [CONFIRMED]** LLM provider: Anthropic API (Claude), key read from the `ANTHROPIC_API_KEY` environment variable.
+- **A3 [CONFIRMED]** LLM provider: local Ollama HTTP API; model and base URL are configured in `rules/config/pipeline.yaml`, with no API key.
 - **A4 [CONFIRMED]** Empty-field policy R8 (Requirement 13), applied to every Unreadable_Value (empty after trimming or `#NOM?`) in originTool, toolVersion, Creation_date and diagnosticFieId.
 - **A5 [CONFIRMED]** A Format_2 row whose label carries no DID goes to a human. R3 does not cover this case. All such rows share one Pattern_Key and one Human_Question (Requirement 8.11).
 - **A6 [CONFIRMED]** A missing value deduced by a rule (ecuCode, ecuName, VehicleModel, generated diagnosticOpID) is a CORRECT, as the repair of an anomaly.
@@ -417,16 +417,16 @@ Requirements 11 and 12 read Legacy B models only through the read-only Legacy_B_
 
 ### Requirement 22: LLM client
 
-**User Story:** As a tech lead, I want a single metered LLM entry point, so that token use is counted and the key stays secret.
+**User Story:** As a tech lead, I want a single metered local LLM entry point, so that token use is counted without requiring a paid API key.
 
 #### Acceptance Criteria
 
 1. THE LLM_Client SHALL be the only component that calls the LLM provider.
 2. WHEN a component sends a prompt with a run_id and the provider responds within the per-call timeout configured in Rule_Config, THE LLM_Client SHALL return a success result containing the response text, the input token count and the output token count reported by the provider.
 3. WHEN a provider call for a run_id ends in success or failure, THE LLM_Client SHALL increment the call count of that run_id by 1 and add the input and output token counts reported by the provider to the totals of that run_id, adding 0 for any count the provider did not report.
-4. THE LLM_Client SHALL read the API key only from the `ANTHROPIC_API_KEY` environment variable (A3) and SHALL NOT write the key value into logs, Decision_Records, error messages, failure results or files.
+4. THE LLM_Client SHALL call the configured Ollama base URL and model without requiring an API key.
 5. IF the provider returns an error or does not respond within the per-call timeout configured in Rule_Config, THEN THE LLM_Client SHALL return a failure result whose error type distinguishes a provider error from a timeout, without raising an exception to the caller.
-6. IF `ANTHROPIC_API_KEY` is unset or empty when a component sends a prompt, THEN THE LLM_Client SHALL return a failure result with a missing-key error type, without contacting the provider, without incrementing the call count and without raising an exception to the caller.
+6. IF Ollama is unreachable or the configured model is not installed when a Run starts, THEN THE Migration_Pipeline SHALL enter Degraded_Mode for that Run and make zero calls to the LLM chat endpoint.
 7. WHEN a component requests the totals of a run_id, THE LLM_Client SHALL return the accumulated input tokens, output tokens and call count of that run_id, with 0 for each value when the run_id has no recorded calls.
 
 ### Requirement 23: Schema discovery agent
@@ -468,7 +468,7 @@ Requirements 11 and 12 read Legacy B models only through the read-only Legacy_B_
 
 #### Acceptance Criteria
 
-1. WHEN a Run starts with the `ANTHROPIC_API_KEY` environment variable absent or set to an empty value, THE Migration_Pipeline SHALL execute the whole Run in Degraded_Mode and make zero calls to the LLM provider.
+1. WHEN Ollama is unreachable or the configured model is not installed when a Run starts, THE Migration_Pipeline SHALL execute the whole Run in Degraded_Mode and make zero calls to the LLM chat endpoint.
 2. WHILE in Degraded_Mode, THE Migration_Pipeline SHALL apply the Rule_Engine, the Human_Decisions of the Human_Decision_Store and the Resolution_Cache entries with the same Field_Decisions as outside Degraded_Mode, and complete the Run with exactly one Row_Outcome per source row and an end-of-run report from the Report_Generator.
 3. WHILE in Degraded_Mode, WHEN a field holds an Unknown_Variant, THE Migration_Pipeline SHALL record a Field_Decision with Action ASK_HUMAN and an explanation indicating Degraded_Mode.
 4. IF an LLM_Client call made for a Pattern_Key returns an error, times out, or returns a response that cannot be parsed into a mapping, a confidence and a justification, THEN THE Migration_Pipeline SHALL record a Field_Decision with Action ASK_HUMAN for every field with that Pattern_Key, write no Resolution_Cache entry for that Pattern_Key, and continue the Run with the remaining rows.

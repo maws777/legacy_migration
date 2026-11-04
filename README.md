@@ -8,7 +8,7 @@ Hackathon 2026 "Information Systems that evolve. Continuity that never breaks." 
 
 ## Installation
 
-Prerequisites: Python 3.11 or later, Git, Windows PowerShell (the start and stop scripts are PowerShell; on Linux or macOS run the `uvicorn`, `streamlit` and `python -m` commands from `scripts/start_all.ps1` by hand).
+Prerequisites: Python 3.11 or later, Git, Windows PowerShell (the start and stop scripts are PowerShell; on Linux or macOS run the `uvicorn`, `streamlit` and `python -m` commands from `scripts/start_all.ps1` by hand), and [Ollama](https://ollama.com/download) with the configured model.
 
 ```powershell
 git clone https://github.com/maws777/legacy_migration.git
@@ -25,20 +25,20 @@ Check the installation (about 40 seconds; the `dataset` tests use `data/legacy/h
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-## LLM key (optional)
+## Local LLM with Ollama
 
-The LLM client reads `ANTHROPIC_API_KEY` at each call. Without it, the pipeline runs in Degraded_Mode: same rule decisions, Unknown_Variants go to humans, and schema discovery proposes the reference Column_Mapping.
+The LLM runs locally through Ollama; no API account or key is needed. Install Ollama, then download the default model and keep the Ollama service running:
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."          # this terminal only
-setx ANTHROPIC_API_KEY "sk-ant-..."            # persistent, for new terminals
+ollama pull qwen2.5:3b
+ollama list
 ```
 
-Never commit the key or write it in a file of the repository. The tests remove it automatically and never call the provider.
+The default endpoint is `http://127.0.0.1:11434`; model, endpoint, timeout, and token pricing are configured in `rules/config/pipeline.yaml`. Local inference has no provider token charge (electricity and hardware are not included). If Ollama is stopped or the configured model is not downloaded, the migration continues in Degraded_Mode: deterministic and saved human decisions still apply, unknown variants go to humans, and schema discovery uses the reference mapping.
 
 ## Validate the Column_Mapping (once per database folder)
 
-A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6). Discover it (LLM, or reference fallback without a key) and validate it as an operator:
+A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6). With Ollama running, discover it using the local model; otherwise, discovery uses the reference fallback. Validate it as an operator:
 
 ```powershell
 .venv\Scripts\python.exe -m migration schema --operator <your-name>

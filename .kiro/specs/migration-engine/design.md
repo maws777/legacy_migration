@@ -14,7 +14,7 @@ Design scope rules:
 Research notes that shaped the design:
 
 - LangGraph pauses a graph with `interrupt(payload)` inside a node and resumes with `Command(resume=value)` on the same `thread_id`. Pausing requires a checkpointer; the SQLite one ships in `langgraph-checkpoint-sqlite` (`SqliteSaver`). On resume the interrupted node re-runs from its start, so the node must have no side effect before `interrupt()`. Sources: [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts), [LangChain blog on interrupt](https://www.langchain.com/blog/making-it-easier-to-build-human-in-the-loop-agents-with-interrupt).
-- The Anthropic Python SDK (`anthropic.Anthropic(...).messages.create`) returns `usage.input_tokens` and `usage.output_tokens`, accepts a client `timeout` and `max_retries`, and raises typed errors (`APITimeoutError` is a subclass of `APIConnectionError`, itself an `APIError`). Source: [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python).
+- Ollama exposes local chat and model-list endpoints over HTTP; `/api/chat` returns `prompt_eval_count` and `eval_count`, and `/api/tags` lists installed models. The client uses the existing `httpx` dependency and requires no API key. Source: [Ollama API](https://github.com/ollama/ollama/blob/main/docs/api.md).
 - SQLAlchemy 1.4+ compiles `regexp_match()` to `REGEXP` on SQLite (backed by a Python function it registers on each pysqlite connection) and to `~` on PostgreSQL. CHECK constraints written with `regexp_match()` therefore stay portable (Requirement 3.7).
 
 Content was rephrased for compliance with licensing restrictions.
@@ -836,7 +836,7 @@ Answer rules: `apply_value` validates first (`validate_value`), stores a `value`
 
 ```python
 # agents/llm_client.py
-LLMErrorType = Literal["missing_key", "timeout", "provider_error"]
+LLMErrorType = Literal["service_unavailable", "timeout", "provider_error"]
 Purpose = Literal["schema_discovery", "resolver", "question_rephrase", "query_agent"]
 
 @dataclass(frozen=True)
@@ -845,7 +845,7 @@ class LLMSuccess:
     ok: Literal[True] = True
 @dataclass(frozen=True)
 class LLMFailure:
-    error_type: LLMErrorType; message: str          # message never contains the key
+    error_type: LLMErrorType; message: str
     input_tokens: int = 0; output_tokens: int = 0
     ok: Literal[False] = False
 LLMResult = LLMSuccess | LLMFailure
@@ -855,15 +855,15 @@ class RunTokenTotals: input_tokens: int; output_tokens: int; calls: int
 
 class LLMClient:
     def __init__(self, cfg: LLMConfig, engine: Engine) -> None: ...   # writes llm_call rows in ops.db
-    def is_available(self) -> bool: ...                                 # ANTHROPIC_API_KEY set and non-empty
+    def is_available(self) -> bool: ...                                 # Ollama reachable and configured model installed
     def complete(self, *, run_id: str, purpose: Purpose, system: str, prompt: str,
                  max_tokens: int | None = None) -> LLMResult: ...      # never raises
     def totals(self, run_id: str) -> RunTokenTotals: ...                # zeros for unknown run_id
 ```
 
-- Key read from `os.environ["ANTHROPIC_API_KEY"]` at each `complete` call; unset or empty -> `LLMFailure("missing_key")`, no provider contact, call count unchanged (Requirement 22.6).
-- Provider: `anthropic.Anthropic(api_key=key, timeout=cfg.timeout_s, max_retries=0).messages.create(model=cfg.model, max_tokens=..., system=system, messages=[{"role": "user", "content": prompt}])`.
-- `APITimeoutError` -> `timeout`; any other `anthropic.APIError` -> `provider_error`. Message = exception class name + HTTP status only.
+- Provider: `httpx.Client(base_url=cfg.base_url, timeout=cfg.timeout_s).post("/api/chat", json={"model": cfg.model, "stream": false, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "options": {"num_predict": ...}})`.
+- Availability: `GET /api/tags` must succeed and list the configured model. A Run probes availability once; an unavailable service or model means Degraded_Mode and no chat calls (Requirement 22.6).
+- Token counts come from `prompt_eval_count` and `eval_count`; timeout -> `timeout`, connection failure -> `service_unavailable`, and other HTTP/API errors -> `provider_error`. Error messages contain only the exception class and HTTP status.
 - Every provider call, success or failure, increments the run call count and adds reported tokens (0 when absent) (Requirement 22.3).
 
 Resolver_Agent prompt (one call per Pattern_Key, Requirement 24.2):
@@ -921,7 +921,8 @@ A conflict is a required target attribute (list in `column_mapping.yaml`) mapped
 
 ```python
 class LLMConfig(BaseModel):
-    model: str = "claude-haiku-4-5"; timeout_s: float = Field(20, gt=0); max_tokens: int = 150
+    model: str = "qwen2.5:3b"; base_url: str = "http://127.0.0.1:11434"
+    timeout_s: float = Field(120, gt=0); max_tokens: int = 150
     price_eur_per_input_token: float = Field(ge=0); price_eur_per_output_token: float = Field(ge=0)
 class PipelineConfig(BaseModel):
     confidence_threshold: float = Field(0.9, ge=0.0, le=1.0)
@@ -1032,7 +1033,7 @@ Scope is fixed by Requirement 5.8: hypothesis properties exist only for R1, R4, 
 | Required column missing (exact, case-sensitive) | `IngestionError(missing_columns=...)`; stop before any row, all names reported | 1.4 |
 | No validated Column_Mapping / header differs from it | Zero rows processed; report note lists pending validation or added and missing columns | 23.6, 23.8 |
 | Row cell count differs from header | Delivered with `malformed=True`; REJECT `INGEST` `MALFORMED_ROW` | 1.8 |
-| `ANTHROPIC_API_KEY` unset or empty | Degraded_Mode for the whole Run: zero provider calls; Unknown_Variant -> ASK_HUMAN `UNKNOWN_VARIANT` with "Degraded_Mode" explanation; schema discovery proposes the reference mapping | 22.6, 23.5, 25.1-25.3, 25.5 |
+| Ollama unreachable or configured model not installed | Degraded_Mode for the whole Run: zero chat calls; Unknown_Variant -> ASK_HUMAN `UNKNOWN_VARIANT` with "Degraded_Mode" explanation; schema discovery proposes the reference mapping | 22.6, 23.5, 25.1-25.3, 25.5 |
 | LLM timeout / provider error / unparseable answer | `LLMFailure` or confidence 0; ASK_HUMAN for every row of the Pattern_Key, no cache entry, Run continues | 22.5, 24.4, 25.4 |
 | LLM proposal below threshold | ASK_HUMAN; suggestion shown in the Human_Question; not cached | 24.6 |
 | Legacy B lookup fails for at least one VIN | Empty Legacy_B_Model_Index, `legacy_b_lookup = failed` in metrics, Run continues | 11.11 |

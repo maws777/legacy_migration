@@ -13,7 +13,7 @@ Test conventions for every task:
 ## Tasks
 
 - [x] 1. [Group 1] Set up the repository, the shared contracts, Rule_Config and the target schema
-  - Create the package layout of design "Module layout", the dependency file for the confirmed stack (FastAPI, uvicorn, SQLAlchemy 2.x, pandas, LangGraph, `langgraph-checkpoint-sqlite`, anthropic, httpx, pydantic v2, PyYAML, Streamlit, pytest, hypothesis) and a `.gitignore` entry for `var/`
+  - Create the package layout of design "Module layout", the dependency file for the confirmed stack (FastAPI, uvicorn, SQLAlchemy 2.x, pandas, LangGraph, `langgraph-checkpoint-sqlite`, httpx, pydantic v2, PyYAML, Streamlit, pytest, hypothesis) and a `.gitignore` entry for `var/`
   - `tests/conftest.py`: register the markers `property`, `integration`, `dataset` and `slow`; skip `dataset` tests automatically while the dataset CSV is absent
   - `tests/fixtures/make_csv.py`: synthetic CSV builder with the anomalies of `migration-rules.md` (`T CM`, `E-PS`, `HVAC-`, ` OBC`, `AR KANA`, `TRAFIC-`, `#NOM?`, `2,04E+12`, empty cells, Format_2 labels with F188, F738 and no DID, shared ids)
   - `rules/types.py`: every frozen dataclass and literal of the design, including `RuleContext`, so other team members can build mocks
@@ -98,7 +98,8 @@ Test conventions for every task:
   - _Requirements: 4.7, 4.8, 5.4, 5.5, 5.6, 18.7, 20.1, 20.2, 20.3, 20.4, 20.5, 21.1, 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8, 21.9, 21.10, 21.11, 21.12_
 
 - [x] 7. [Group 5] Implement the LLM_Client, the API_Agent_Legacy, the Resolver_Agent with its cache, and Degraded_Mode
-  - `agents/llm_client.py`: `LLMClient` per the frozen contract (key read from `ANTHROPIC_API_KEY` at each call; `missing_key` without provider contact and without call count; `timeout` distinct from `provider_error`; `llm_call` table; `totals(run_id)`); the key value never reaches logs, messages, records or files
+  - `agents/llm_client.py`: `LLMClient` per the frozen contract (Ollama `/api/tags` availability probe; local `/api/chat` calls; `timeout` distinct from service/provider errors; `llm_call` table; `totals(run_id)`); no API key is required
+  - Tests with a fake `LLMClient` and a mocked Ollama HTTP client: `tests/unit/test_llm_client.py`; `tests/unit/test_agents.py` (one call per Pattern_Key, at most one call per distinct key per Run, unparseable answer gives confidence 0, threshold gate, cache reuse with tokens 0, Human_Decision applied before the cache, mapping conflicts, reference fallback); `tests/integration/test_degraded_mode.py` (same rule decisions with Ollama offline, Unknown_Variants ASK_HUMAN with a Degraded_Mode explanation, zero chat calls)
   - `agents/api_agent_legacy.py`: `LegacyAClient` (httpx over the Legacy_A_API) and `SchemaDiscoveryAgent` (prompt with the header and the first N rows, proposal parsing, conflicts, reference fallback, zero calls in Degraded_Mode, `column_mapping` table, operator validation); `check_mapping` switches to the validated Column_Mapping (pending or header mismatch: zero rows and report notes); ops routes `POST /ops/schema/discover`, `POST /ops/schema/validate`, `GET /ops/schema/mapping`
   - `agents/resolver_agent.py` (one call per Pattern_Key carrying only field, reason, normalized value and allowed values; unparseable or invalid answer gives confidence 0) and `agents/resolution_cache.py` (persistent, keyed by Pattern_Key)
   - `resolve` node: cache lookup, Resolver_Agent call or Degraded_Mode marker, cache only proposals at or above the Confidence_Threshold, fill `llm_suggestions`, `llm_status` and `llm_tokens`; Degraded_Mode decided once at Run start; tokens, call count, cache hit rate and Degraded_Mode flag reach the metrics and the report; the Human_Question shows the LLM suggestion
