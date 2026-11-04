@@ -1,2 +1,10 @@
 *.pptx
 *.pdf
+# Runtime databases and generated files (target.db, ops.db, checkpoints.db, exports)
+var/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.hypothesis/

@@ -1,0 +1,39 @@
+# Pipeline tunables (design "Rule_Config"). Values not set here use the documented defaults.
+confidence_threshold: 0.9
+batch_size: 1000
+legacy_b_lookup: true
+hitl_example_rows: 5
+discovery_sample_size: 20
+# Fields whose LLM proposals may be applied automatically at or above the threshold
+# (closed dictionaries only, decisions.md). Other fields always go to a human.
+resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
+llm:
+  model: claude-haiku-4-5
+  timeout_s: 20
+  max_tokens: 150
+  # Approximate Claude Haiku 4.5 list prices (USD 1 / 5 per million tokens) converted to EUR.
+  price_eur_per_input_token: 0.00000092
+  price_eur_per_output_token: 0.0000046
+control_sample:
+  size: 50
+  seed: 42
+legacy_b:
+  seed: 2026
+  conflicts: 15
+services:
+  orchestrator: http://127.0.0.1:8000
+  legacy_a: http://127.0.0.1:8001
+  legacy_b: http://127.0.0.1:8002
+  target: http://127.0.0.1:8003
+client_app:
+  interval_s: 1.0
+  timeout_s: 5.0
+query_agent:
+  enabled: false
+  row_limit: 200
+paths:
+  source_csv: data/legacy/hackathon-2026-digital-continuity-dataset.csv
+  target_db: var/target.db
+  ops_db: var/ops.db
+  checkpoints_db: var/checkpoints.db
+  export_dir: var/exports

@@ -1,0 +1,14 @@
+# Confirmed stack (tech.md, requirements A1). Python 3.11+.
+fastapi>=0.110
+uvicorn>=0.29
+SQLAlchemy>=2.0,<3
+pandas>=2.1
+langgraph>=0.2
+langgraph-checkpoint-sqlite>=2.0
+anthropic>=0.34
+httpx>=0.27
+pydantic>=2.6,<3
+PyYAML>=6.0
+streamlit>=1.35
+pytest>=8.0
+hypothesis>=6.100

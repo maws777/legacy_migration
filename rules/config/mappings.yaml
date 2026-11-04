@@ -1,0 +1,15 @@
+# Value mappings (migration-rules.md R2 and R3).
+tool_map:
+  DiagTool: DDT2000
+  AfterSalesDiag: Clip
+did_map:
+  F187: ID0002
+  F191: ID0003
+  F188: ID0004
+  F012: ID0005
+# Labels that identify a VIN read when ecuCode is empty (R3 -> ID0001).
+vin_labels:
+  - Lecture identifiant châssis
+  - Identification véhicule
+  - Numéro identification véhicule
+  - Identifiant véhicule usine

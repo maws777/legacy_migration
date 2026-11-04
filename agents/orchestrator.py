@@ -1,0 +1,339 @@
+"""Orchestrator (port 8000): client routes routed per phase, plus the ops routes used by the UI.
+
+Run: ``uvicorn agents.orchestrator:app --port 8000``. Services are built on the first request.
+"""
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+import httpx
+from fastapi import BackgroundTasks, FastAPI, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+from agents.schemas import (
+    ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
+    SchemaProposal, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
+)
+from rules.fields import normalize_vin
+from hitl.schemas import AnswerResult, HumanAnswer, HumanQuestion
+from reporting.decision_log import UnknownRunError, export_media_type
+from reporting.schemas import DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest
+from rules.errors import ErrorCode, error_payload
+from rules.types import Action, DecidedBy
+
+
+class ApiError(Exception):
+    def __init__(self, status: int, code: ErrorCode, message: str, details: Any = None) -> None:
+        super().__init__(message)
+        self.status, self.code, self.message, self.details = status, code, message, details
+
+
+@dataclass
+class Services:
+    pipeline: Any                                   # migration.pipeline.MigrationPipeline
+    export_dir: Path = Path("var/exports")
+    phase: Any = None                               # migration.phase_controller.PhaseController
+    legacy_a: Any = None                            # agents.api_agent_legacy.LegacyAClient
+    legacy_b: Any = None                            # agents.api_agent_legacy_b.ApiAgentLegacyB
+    target: httpx.Client | None = None              # client of the Target_API
+    expected: Any = None                            # migration.expected.ExpectedRecordBuilder
+    reconciler: Any = None                          # migration.reconciliation.Reconciler
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+def latest_summary(pipeline) -> dict | None:
+    """Coverage and exclusion summary of the latest completed full Run (shown at cutover approval)."""
+    run = pipeline.runs.latest_full_run()
+    if run is None:
+        return None
+    try:
+        r = pipeline.reports.build(run["run_id"])
+    except UnknownRunError:
+        return None
+    return {"run_id": r.run_id, "analysed": r.analysed, "loaded": r.loaded, "coverage_pct": r.coverage_pct,
+            "rejected_out_of_scope": r.rejected_out_of_scope, "rejected_error": r.rejected_error,
+            "pending_human": r.pending_human}
+
+
+def build_services(pipeline, *, legacy_a=None, legacy_b=None, target: httpx.Client | None = None,
+                   export_dir: Path = Path("var/exports"), reconciler_factory=None) -> Services:
+    """Wire the Phase_Controller, the expected-record builder and the backends around a pipeline."""
+    from migration.expected import ExpectedRecordBuilder
+    from migration.phase_controller import PhaseController, make_gate
+
+    def mapping():
+        m = pipeline.schema_agent.validated_mapping()
+        return m.mapping if m is not None else dict(pipeline.config().column_mapping.mapping)
+
+    def shared():
+        run = pipeline.runs.latest_full_run()
+        return pipeline.deps.shared_ids.load(run["run_id"]) if run else frozenset()
+
+    def legacy_b_model(vin: str):
+        if legacy_b is None:
+            return None
+        try:
+            t = legacy_b.model_reference(vin)
+        except Exception:  # noqa: BLE001 - Legacy B down: no model reference
+            return None
+        return t.vehicle_model if t is not None else None
+
+    s = Services(pipeline=pipeline, export_dir=export_dir, legacy_a=legacy_a, legacy_b=legacy_b, target=target)
+    s.expected = ExpectedRecordBuilder(pipeline.config, mapping, pipeline.hitl.decisions.views,
+                                       pipeline.cache.all, shared, legacy_b_model)
+    if reconciler_factory is not None:
+        s.reconciler = reconciler_factory(s)
+    latest = (lambda: s.reconciler.latest("control_sample")) if s.reconciler is not None else (lambda: None)
+    s.phase = PhaseController(pipeline.ops_engine, make_gate(pipeline.hitl.open_count, latest),
+                              legacy_a.is_reachable if legacy_a is not None else (lambda: False),
+                              lambda: latest_summary(pipeline))
+    pipeline.deps.phase = s.phase.current
+    return s
+
+
+def default_services() -> Services:
+    from agents.api_agent_legacy import LegacyAClient
+    from agents.api_agent_legacy_b import ApiAgentLegacyB
+    from migration.pipeline import MigrationPipeline
+    from rules.config import load_rule_config
+    cfg = load_rule_config()
+    paths, urls = cfg.pipeline.paths, cfg.pipeline.services
+    legacy_b = ApiAgentLegacyB.from_url(urls.legacy_b, cfg)
+    pipeline = MigrationPipeline(paths.source_csv, var_dir=Path(paths.ops_db).parent,
+                                 **({"legacy_b": legacy_b} if cfg.pipeline.legacy_b_lookup else {}))
+    try:
+        from migration.reconciliation import Reconciler
+        factory = Reconciler.factory
+    except ImportError:  # pragma: no cover - before task 10
+        factory = None
+    return build_services(pipeline, legacy_a=LegacyAClient.from_url(urls.legacy_a), legacy_b=legacy_b,
+                          target=httpx.Client(base_url=urls.target, timeout=5.0),
+                          export_dir=Path(paths.export_dir), reconciler_factory=factory)
+
+
+def create_app(services: Services | Callable[[], Services] | None = None) -> FastAPI:
+    app = FastAPI(title="Orchestrator")
+    lock = threading.Lock()
+    holder: dict[str, Services] = {}
+    factory = services if callable(services) else (lambda: services) if services is not None else default_services
+
+    def svc() -> Services:
+        with lock:
+            if "s" not in holder:
+                holder["s"] = factory()
+            return holder["s"]
+
+    app.state.services = svc
+
+    @app.exception_handler(ApiError)
+    def _api_error(_request: Request, exc: ApiError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content=error_payload(exc.code, exc.message, exc.details))
+
+    @app.exception_handler(UnknownRunError)
+    def _unknown_run(_request: Request, exc: UnknownRunError) -> JSONResponse:
+        return JSONResponse(status_code=404, content=error_payload("UNKNOWN_RUN", str(exc), {"run_id": exc.run_id}))
+
+    def run_or_404(run_id: str) -> RunInfo:
+        try:
+            return svc().pipeline.run_info(run_id)
+        except KeyError:
+            raise UnknownRunError(run_id) from None
+
+    # ---------------------------------------------------------------- runs
+    @app.post("/ops/campaigns", status_code=202, response_model=RunInfo)
+    def start_campaign(body: StartRunRequest | None = None) -> RunInfo:
+        return svc().pipeline.start_campaign((body or StartRunRequest()).operator)
+
+    @app.get("/ops/runs", response_model=list[RunInfo])
+    def list_runs(limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0)) -> list[RunInfo]:
+        p = svc().pipeline
+        return [p.run_info(r["run_id"]) for r in p.runs.list_runs(limit=limit, offset=offset)]
+
+    @app.get("/ops/runs/{run_id}", response_model=RunInfo)
+    def get_run(run_id: str) -> RunInfo:
+        return run_or_404(run_id)
+
+    @app.get("/ops/runs/{run_id}/report", response_model=RunReport)
+    def get_report(run_id: str) -> RunReport:
+        run_or_404(run_id)
+        return svc().pipeline.reports.build(run_id)
+
+    @app.get("/ops/runs/{run_id}/metrics", response_model=RunMetrics)
+    def get_metrics(run_id: str) -> RunMetrics:
+        run_or_404(run_id)
+        m = svc().pipeline.metrics.get(run_id)
+        if m is None:
+            raise UnknownRunError(run_id)
+        return m
+
+    @app.get("/ops/runs/{run_id}/decisions", response_model=DecisionPage)
+    def get_decisions(run_id: str, source_row: int | None = None, field: str | None = None,
+                      action: Action | None = None, rule_id: str | None = None, decided_by: DecidedBy | None = None,
+                      limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)) -> DecisionPage:
+        run_or_404(run_id)
+        filters = LogFilters(source_row=source_row, field=field, action=action, rule_id=rule_id, decided_by=decided_by)
+        return svc().pipeline.decision_logger.query(run_id, filters, limit, offset)
+
+    @app.get("/ops/runs/{run_id}/decisions/export")
+    def export_decisions(run_id: str, format: Literal["json", "csv"] = "json") -> FileResponse:
+        s = svc()
+        path = s.pipeline.decision_logger.export(run_id, format, s.export_dir)
+        return FileResponse(path, media_type=export_media_type(format), filename=path.name)
+
+    # ---------------------------------------------------------------- HITL (task 6)
+    @app.post("/ops/campaigns/{campaign_id}/resume", status_code=202, response_model=RunInfo)
+    def resume_campaign(campaign_id: str, body: OperatorBody) -> RunInfo:
+        from migration.pipeline import CampaignNotPaused
+        try:
+            return svc().pipeline.resume(campaign_id, body.operator)
+        except CampaignNotPaused as exc:
+            raise ApiError(409, "CONFLICT", str(exc)) from None
+
+    @app.get("/ops/questions", response_model=list[HumanQuestion])
+    def list_questions(status: Literal["open", "closed", "superseded"] | None = None,
+                       run_id: str | None = None) -> list[HumanQuestion]:
+        return svc().pipeline.hitl.list(status, run_id)
+
+    @app.get("/ops/questions/{question_id}", response_model=HumanQuestion)
+    def get_question(question_id: str) -> HumanQuestion:
+        q = svc().pipeline.hitl.get(question_id)
+        if q is None:
+            raise ApiError(404, "NOT_FOUND", f"unknown question {question_id}")
+        return q
+
+    @app.post("/ops/questions/{question_id}/answer", response_model=AnswerResult)
+    def answer_question(question_id: str, body: HumanAnswer) -> AnswerResult:
+        from hitl.queue import AnswerRefused, ValueRejected
+        try:
+            return svc().pipeline.hitl.answer(question_id, body)
+        except KeyError:
+            raise ApiError(404, "NOT_FOUND", f"unknown question {question_id}") from None
+        except AnswerRefused as exc:
+            raise ApiError(409, "CONFLICT", str(exc)) from None
+        except ValueRejected as exc:
+            raise ApiError(422, "VALIDATION_ERROR", exc.failed_rule, {"failed_rule": exc.failed_rule}) from None
+
+    # ---------------------------------------------------------------- schema discovery (task 7)
+    @app.post("/ops/schema/discover", response_model=SchemaProposal)
+    def discover_schema() -> SchemaProposal:
+        p = svc().pipeline
+        p.ensure_llm()
+        return p.schema_agent.discover()
+
+    @app.post("/ops/schema/validate", response_model=ColumnMapping)
+    def validate_schema(body: ValidateMappingRequest) -> ColumnMapping:
+        from agents.api_agent_legacy import MappingConflictError
+        try:
+            return svc().pipeline.schema_agent.validate(body.proposal_id, body.operator)
+        except KeyError:
+            raise ApiError(404, "NOT_FOUND", f"unknown proposal {body.proposal_id}") from None
+        except MappingConflictError as exc:
+            raise ApiError(409, "CONFLICT", str(exc), [c.model_dump() for c in exc.conflicts]) from None
+
+    @app.get("/ops/schema/mapping", response_model=ColumnMapping)
+    def get_mapping() -> ColumnMapping:
+        m = svc().pipeline.schema_agent.validated_mapping()
+        if m is None:
+            raise ApiError(404, "NOT_FOUND", "no validated Column_Mapping")
+        return m
+
+    # ---------------------------------------------------------------- client routes (task 9)
+    def unavailable(backend: str, why: str) -> ApiError:
+        return ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: {why}", {"backend": backend})
+
+    @app.get("/api/vehicles/{vin}/diagnostics", response_model=DiagnosticsResponse)
+    def client_diagnostics(vin: str, background: BackgroundTasks) -> DiagnosticsResponse:
+        s = svc()
+        phase = s.phase.current()                    # read once: the request ends on this backend
+        v = normalize_vin(vin)
+        if phase == 4:
+            try:
+                r = s.target.get(f"/target/vehicles/{v}/diagnostics")
+            except httpx.HTTPError as exc:
+                raise unavailable("target", type(exc).__name__) from None
+            if r.status_code not in (200, 404):
+                raise unavailable("target", f"HTTP {r.status_code}")
+            s.phase.served["target"] += 1
+            if r.status_code == 404:
+                raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}")
+            return DiagnosticsResponse.model_validate(r.json())
+        try:
+            rows = s.legacy_a.rows_by_vin(v).rows
+        except httpx.HTTPError as exc:
+            raise unavailable("legacy_a", type(exc).__name__) from None
+        expected = s.expected.for_rows(v, rows)
+        s.phase.served["legacy_a"] += 1
+        if phase == 3 and s.reconciler is not None:
+            background.add_task(s.reconciler.compare_vin_safely, v)
+        if not expected:
+            raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}")
+        return DiagnosticsResponse(vin=v, operations=[e.item for e in expected])
+
+    @app.get("/api/vehicles/{vin}/model", response_model=ModelReference)
+    def client_model(vin: str) -> ModelReference:
+        from agents.api_agent_legacy_b import LegacyBUnavailable
+        s = svc()
+        try:
+            t = s.legacy_b.model_reference(vin)
+        except LegacyBUnavailable as exc:
+            raise unavailable("legacy_b", str(exc)) from None
+        if t is None:
+            raise ApiError(404, "NOT_FOUND", f"no model reference for VIN {normalize_vin(vin)}")
+        s.phase.served["legacy_b"] += 1
+        return ModelReference(vin=t.vin, vehicle_model=t.vehicle_model, updated_on=t.updated_on, errors=list(t.errors))
+
+    # ---------------------------------------------------------------- phase ops routes (task 9)
+    @app.get("/ops/phase", response_model=PhaseStatus)
+    def phase_status() -> PhaseStatus:
+        return svc().phase.status()
+
+    @app.post("/ops/phase/transition", response_model=TransitionResult)
+    def phase_transition(body: TransitionRequest) -> TransitionResult:
+        return svc().phase.request(body.target_phase, body.operator)
+
+    @app.post("/ops/phase/approve", response_model=TransitionResult)
+    def phase_approve(body: OperatorRequest) -> TransitionResult:
+        return svc().phase.approve(body.operator)
+
+    @app.post("/ops/phase/reject", response_model=TransitionResult)
+    def phase_reject(body: OperatorRequest) -> TransitionResult:
+        return svc().phase.reject(body.operator)
+
+    @app.post("/ops/phase/rollback", response_model=TransitionResult)
+    def phase_rollback(body: RollbackRequest) -> TransitionResult:
+        return svc().phase.rollback(body.target_phase, body.operator)
+
+    @app.get("/ops/phase/transitions", response_model=list[TransitionLogEntry])
+    def phase_transitions() -> list[TransitionLogEntry]:
+        return svc().phase.transitions()
+
+    # ---------------------------------------------------------------- reconciliation (task 10)
+    def reconciler():
+        r = svc().reconciler
+        if r is None:
+            raise ApiError(503, "BACKEND_UNAVAILABLE", "no Reconciler configured")
+        return r
+
+    @app.post("/ops/reconciliation/control-sample", response_model=ReconResult)
+    def reconcile_control_sample() -> ReconResult:
+        return reconciler().compare_control_sample()
+
+    @app.get("/ops/reconciliation/latest", response_model=ReconResult)
+    def reconciliation_latest(scope: Literal["vin", "control_sample"] = "control_sample") -> ReconResult:
+        res = reconciler().latest(scope)
+        if res is None:
+            raise ApiError(404, "NOT_FOUND", f"no {scope} reconciliation yet")
+        return res
+
+    return app
+
+
+class OperatorBody(BaseModel):
+    operator: str = Field(min_length=1)
+
+
+app = create_app()

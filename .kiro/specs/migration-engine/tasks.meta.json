@@ -1,0 +1,108 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1. [Group 1] Set up the repository, the shared contracts, Rule_Config and the target schema": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790152315
+      },
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790177476
+      }
+    ],
+    "2. [Group 1] Implement ingestion, the Legacy_A_API and the Run_Workflow skeleton": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790153541
+      }
+    ],
+    "3.1 Implement the pure rule package": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790153689
+      }
+    ],
+    "3.7 Build the Run context and the decision log, and wire the rule nodes into the Run_Workflow": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790153797
+      }
+    ],
+    "4. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790153950
+      }
+    ],
+    "5.1 Implement the Target_Repository load, the report, the metrics and the run ops routes": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154037
+      }
+    ],
+    "6. [Group 4] Implement the grouped HITL queue, persisted Human_Decisions and the resume of a campaign": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154117
+      }
+    ],
+    "7. [Group 5] Implement the LLM_Client, the API_Agent_Legacy, the Resolver_Agent with its cache, and Degraded_Mode": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154205
+      }
+    ],
+    "8. [Group 6] Implement the Legacy B simulator, the Legacy_B_API and the API_Agent_Legacy_B": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154279
+      }
+    ],
+    "9. [Group 6] Implement the Phase_Controller, the cutover gate, the Target_API and the Orchestrator routing": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154360
+      }
+    ],
+    "10. [Group 6] Implement the Reconciler and the Client_App": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154437
+      }
+    ],
+    "11. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154561
+      }
+    ],
+    "12. [Group 7] Implement the Streamlit UI": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154691
+      }
+    ],
+    "13. [Group 8] Add the validation-target test and write the Project_Docs": [
+      {
+        "executionId": "6cdf7477-6bb8-41a0-a6c2-3392bca5965b",
+        "chatSessionId": "sess_8d11e056-69e2-468c-b4b5-7e953f18b64a",
+        "timestamp": 1793790154801
+      }
+    ]
+  }
+}

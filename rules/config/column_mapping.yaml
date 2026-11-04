@@ -1,0 +1,24 @@
+# Reference Column_Mapping: source column (exact, case-sensitive, typo kept) -> target attribute.
+# The source names below are also the canonical column names used by the Rule_Engine.
+mapping:
+  originTool: DiagToolsVersions.DiagToolName
+  toolVersion: DiagToolsVersions.DiagToolVersion
+  VIN: Vehicle.VIN
+  diagnosticFieId: DiagnosticOperation.diagnosticOpID
+  ecuName: DiagnozedECU.ecuName
+  ecuCode: DiagValueResult.ValueDescription
+  DescriptionDiagECU: Label
+  ValueReference: DiagValueResult.ValueReference
+  Creation_date: DiagnosticOperation.creationDate
+  Vehmodel: Vehicle.VehicleModel
+required_targets:
+  - Vehicle.VIN
+  - Vehicle.VehicleModel
+  - DiagnozedECU.ecuName
+  - DiagnosticOperation.diagnosticOpID
+  - DiagnosticOperation.creationDate
+  - DiagValueResult.ValueReference
+  - DiagValueResult.ValueDescription
+  - DiagToolsVersions.DiagToolName
+  - DiagToolsVersions.DiagToolVersion
+  - Label

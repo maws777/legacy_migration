@@ -1,0 +1,36 @@
+# Closed dictionaries (migration-rules.md "Dictionaries").
+# Entries of one dictionary must have distinct Normalized_Keys (checked at load).
+vehicle_models:
+  - KANGOO
+  - MASTER
+  - CLIO
+  - SCENIC E-TECH
+  - ARKANA
+  - CAPTUR
+  - TRAFIC
+  - AUSTRAL
+  - MEGANE E-TECH
+  - RAFALE
+ecus:
+  - BCM
+  - AIRBAG
+  - TCM
+  - BMS
+  - OBC
+  - ECM
+  - ABS
+  - ADAS
+  - HVAC
+  - IVI
+  - VCU
+  - EPS
+tools:
+  - DDT2000
+  - Clip
+  - CANalyzer
+value_descriptions:
+  ID0001: Vehicle VIN
+  ID0002: Part Number (F187)
+  ID0003: Hardware (F191)
+  ID0004: Software (F188)
+  ID0005: Calibration (F012)

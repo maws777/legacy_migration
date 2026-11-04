@@ -1,0 +1,12 @@
+[project]
+name = "legacy-migration"
+version = "0.1.0"
+description = "Hackathon 2026 migration-engine: Legacy A CSV to the constrained target model (Strangler Fig)."
+requires-python = ">=3.11"
+# Runtime and test dependencies are listed in requirements.txt.
+
+[tool.pytest.ini_options]
+# Markers are registered in tests/conftest.py; --strict-markers turns a typo into an error.
+addopts = "--strict-markers -p no:cacheprovider"
+testpaths = ["tests"]
+pythonpath = ["."]
