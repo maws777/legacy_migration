@@ -147,7 +147,8 @@ class MigrationPipeline:
             self.schema_agent.llm = self.deps.llm
         if self.deps.resolver is None:
             cfg = cfg or self.config()
-            self.deps.resolver = ResolverAgent(self.deps.llm, cfg.pipeline.llm.max_tokens)
+            self.deps.resolver = ResolverAgent(self.deps.llm, cfg.pipeline.llm.max_tokens,
+                                               cfg.pipeline.resolver_max_iterations)
         return self.deps.llm
 
     def seed_reference_mapping(self, operator: str = "setup"):
@@ -182,14 +183,15 @@ class MigrationPipeline:
                     if d.pattern_key}
             notes = list(data.notes)
             if data.degraded:
-                notes.append("Degraded_Mode: no LLM provider available; Unknown_Variants were sent to humans.")
+                reason = data.extra.get("degraded_reason") or "no LLM provider available"
+                notes.append(f"Degraded_Mode: {reason}; Unknown_Variants were sent to humans.")
         seconds = data.timer.total()
-        price = cfg.pipeline.llm if cfg is not None else None
+        # Cost from the Rule_Config prices of the chosen provider (0 EUR for a local Ollama model).
+        price_in, price_out = cfg.pipeline.llm.price_per_token() if cfg is not None else (0.0, 0.0)
         report = ReportGenerator.compose(
             data.run_id, analysed=len(data.rows), counts=counts, out_of_scope=out_of_scope,
             traced_rows=sum(counts.values()), input_tokens=tin, output_tokens=tout,
-            price_in=price.price_eur_per_input_token if price else 0.0,
-            price_out=price.price_eur_per_output_token if price else 0.0, seconds=seconds, loaded=loaded,
+            price_in=price_in, price_out=price_out, seconds=seconds, loaded=loaded,
             cache_state="warm" if data.extra.get("cache_entries", 0) else "cold", notes=notes)
         self.metrics.save(RunMetrics(
             run_id=data.run_id, total_seconds=report.seconds, stage_seconds=dict(data.timer.seconds),

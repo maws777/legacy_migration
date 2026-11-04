@@ -1,6 +1,6 @@
 # Demo scenario
 
-Each step gives the exact PowerShell command and the expected result. The results below were observed on 4 November 2026 with the services started by `scripts/start_all.ps1`, without `ANTHROPIC_API_KEY` (Degraded_Mode) and with the Legacy_B_API running. run_ids and timestamps differ on every run; counts do not.
+Each step gives the exact PowerShell command and the expected result. The results below were observed on 4 November 2026 with the services started by `scripts/start_all.ps1`, with no usable LLM provider (Ollama not running: Degraded_Mode) and with the Legacy_B_API running. The 10,000-row file has no Unknown_Variant, so a running Ollama changes only step 1 (the mapping is proposed by the LLM) and removes the Degraded_Mode line of the reports; the counts stay the same. run_ids and timestamps differ on every run; counts do not.
 
 Every API step also exists in the UI (http://127.0.0.1:8501): Home (campaigns), Stats, Questions, Decision log, Phases.
 
@@ -27,7 +27,7 @@ $m = Post "/ops/schema/validate" @{ proposal_id = $p.proposal_id; operator = "de
 "validated_by=$($m.validated_by) columns=$(@($m.mapping.PSObject.Properties).Count)"
 ```
 
-Expected: `fallback=True conflicts=0` (reference Column_Mapping, no LLM key), then `validated_by=demo columns=10`. With a key, `fallback=False` means the LLM proposed the mapping; validate only when `conflicts=0` (otherwise the validation answers 409 with the conflicting attributes).
+Expected: `fallback=True conflicts=0` (reference Column_Mapping, no LLM available), then `validated_by=demo columns=10`. With Ollama running (or Anthropic with a key), `fallback=False` means the LLM proposed the mapping; validate only when `conflicts=0` (otherwise the validation answers 409 with the conflicting attributes; start the services with `-NoLLM` to get the reference mapping).
 
 ## 2. Migration 1
 
@@ -56,7 +56,7 @@ Processing time: 0 min 6 sec
 Coverage: 7,564 of 10,000 source rows loaded (75.6%)
 Rejected: 990 out of scope, 926 in error; pending human decision: 520
 Run type: cold (empty Resolution_Cache)
-Degraded_Mode: no LLM provider available; Unknown_Variants were sent to humans.
+Degraded_Mode: Ollama unreachable at http://localhost:11434 (ConnectError); Unknown_Variants were sent to humans.
 ```
 
 Target_DB: 6,010 vehicles, 12 ECUs, 7,564 vehicle-ECU links, 18 tool versions, 7,564 diagnostic operations, 7,564 value results.
@@ -217,13 +217,13 @@ The 10,000-row file has a single homogeneous group (2 rows). `data/synthetic_edg
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\stop_all.ps1
 powershell -ExecutionPolicy Bypass -File scripts\prepare_edge_demo.ps1 -Reset
-powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -Source data\synthetic_edge_cases.csv -VarDir var\demo_edge -NoClient
+powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -Source data\synthetic_edge_cases.csv -VarDir var\demo_edge -NoClient -NoLLM
 $api = "http://127.0.0.1:8000"
 $q = Invoke-RestMethod "$api/ops/questions?status=open"
 $q | Format-Table pattern_key, row_count, @{ n = "options"; e = { $_.options -join "," } } -AutoSize
 ```
 
-Expected: the preparation prints 1 migrated, 0 corrected, 0 rejected, 7 requiring human decision, then `Campaign ready in var/demo_edge` (it runs without the LLM key so the questions are created). Six open questions; `originTool|UNKNOWN_VARIANT|CLIP` (2 rows) offers `apply_value,reject_group,case_by_case`, while `Vehmodel|UNKNOWN_VARIANT|MÉGANEETECH` offers only `reject_group,case_by_case` (R6).
+Expected: the preparation prints 1 migrated, 0 corrected, 0 rejected, 7 requiring human decision, then `Campaign ready in var/demo_edge` (it runs with `--no-llm` so the questions are created). Six open questions; `originTool|UNKNOWN_VARIANT|CLIP` (2 rows) offers `apply_value,reject_group,case_by_case`, while `Vehmodel|UNKNOWN_VARIANT|MÉGANEETECH` offers only `reject_group,case_by_case` (R6).
 
 ```powershell
 $clip = $q | Where-Object pattern_key -eq "originTool|UNKNOWN_VARIANT|CLIP"
@@ -236,3 +236,31 @@ $r = Invoke-RestMethod -Method Post "$api/ops/campaigns/$camp/resume" -ContentTy
 ```
 
 Expected: the answer returns a `value` decision `Clip`; the next Run reports 1 migrated, 2 corrected, 0 rejected, 5 requiring human decision with 5 open questions; rows 2 and 6 show `HUMAN_VALUE human Clip` with the explanation `Human decision on originTool|UNKNOWN_VARIANT|CLIP: apply_value 'Clip'.`; the Target_DB holds 3 diagnostic operations.
+
+## Variant: the Resolver_Agent with Ollama on the edge cases
+
+Needs Ollama running with `qwen2.5:7b` (see README, "LLM provider"). The answers come from a real model, so the exact values and confidences can vary between machines and runs; the rules that frame them do not.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\stop_all.ps1
+Remove-Item -Recurse -Force var\demo_agent -ErrorAction SilentlyContinue
+.venv\Scripts\python.exe -m migration schema --source data\synthetic_edge_cases.csv --var var\demo_agent --operator demo --no-llm
+.venv\Scripts\python.exe -m migration run --source data\synthetic_edge_cases.csv --var var\demo_agent --operator demo
+powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -Source data\synthetic_edge_cases.csv -VarDir var\demo_agent -NoClient
+$api = "http://127.0.0.1:8000"
+$run = (Invoke-RestMethod "$api/ops/runs?limit=1")[0].run_id
+Invoke-RestMethod "$api/ops/runs/$run/tool-calls" | Format-Table pattern_key, iteration, tool, params, result_summary -AutoSize
+(Invoke-RestMethod "$api/ops/runs/$run/decisions?decided_by=llm").items | Format-Table source_row, field, reason, after, confidence, explanation -AutoSize
+(Invoke-RestMethod "$api/ops/runs/$run/metrics") | Select-Object llm_calls, input_tokens, output_tokens, degraded_mode
+```
+
+Expected:
+
+- The report of the run has no Degraded_Mode line, and its cost is `0.0000 €` while the token count is not 0.
+- Six Unknown_Variant keys reach the agent, each with 1 to 3 LLM turns (`llm_calls` between 6 and 18). Each turn is either one tool call or the final answer.
+- The tool-call table lists each call with its iteration, tool name, JSON parameters and a one-line summary, for example `find_similar_values {"limit": 3}  AIRBAG (0.75), ...` or `test_proposed_rule {"value": "Clip"}  valid: CORRECT on 2 row(s) with 'Clip'; auto-apply allowed`.
+- Decisions with `decided_by = llm` (reason `LLM_VALUE`) exist only for originTool, ecuName, Vehmodel or ecuCode, with a confidence of at least 0.9; their explanation is the model justification followed by `Resolver_Agent: n iteration(s), k tool call(s): ...`.
+- `Creation_date|UNKNOWN_VARIANT|2024-03-15 10:30` is always an open question (`proposed_human_only` in the Questions page), even with a high confidence: dates are never applied automatically.
+- A key without a valid final answer after 3 turns becomes a question with `llm_status = failed`.
+
+The same scenario with scripted Ollama answers, and exact expected counts (4 corrected, 3 questions, 12 LLM calls, 720 tokens, 0 €), is the test `tests/integration/test_ollama_pipeline.py::test_agent_with_simulated_ollama`.

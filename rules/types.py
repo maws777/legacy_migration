@@ -200,6 +200,7 @@ class RuleContext:
     llm_suggestions: Mapping[str, LLMSuggestion] = field(default_factory=dict)
     llm_status: Mapping[str, LLMStatus] = field(default_factory=dict)
     llm_tokens: Mapping[str, int] = field(default_factory=dict)
+    llm_traces: Mapping[str, str] = field(default_factory=dict)    # Pattern_Key -> Resolver_Agent tool trace
     vin_model_index: Mapping[str, frozenset[str]] = field(default_factory=dict)
     legacy_b_model_index: Mapping[str, str] = field(default_factory=dict)
     shared_op_ids: frozenset[str] = frozenset()

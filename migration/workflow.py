@@ -16,12 +16,14 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from agents.resolver_tools import RunStats, closed_values, validate_proposal
 from hitl.schemas import QuestionGroup
 from migration.context import SharedOpIdStore, merge_partials, partial_op_ids, partial_vin_models, shared_from_usage
 from migration.ingestion import IngestionError, SourceReadError, ingest
 from migration.run_store import RunData, RunRepository, RunStore
 from reporting.decision_log import DecisionLogger, to_record
 from reporting.metrics import StageTimer
+from reporting.schemas import ToolCallRecord
 from rules.config import ConfigError, RuleConfig, load_rule_config
 from rules.engine import decide_row, scan_row
 from rules.fields import is_valid_vin
@@ -29,8 +31,8 @@ from rules.memo import build_field_memo, distinct_values
 from rules.templates import render
 from rules.timeutil import utcnow
 from rules.types import (
-    CANONICAL_COLUMNS, COL_LABEL, LOAD_FIELD, ROW_FIELD, CachedResolution, FieldDecision, HumanDecisionView, RowDecision,
-    RuleContext,
+    CANONICAL_COLUMNS, COL_LABEL, LOAD_FIELD, ROW_FIELD, CachedResolution, FieldDecision, HumanDecisionView,
+    LLMSuggestion, RowDecision, RuleContext,
 )
 
 ROW_OUTCOMES = ("MIGRATE", "CORRECT", "REJECT", "ASK_HUMAN")
@@ -151,7 +153,16 @@ def build_run_graph(deps: PipelineDeps, checkpointer: BaseCheckpointSaver | None
             data.memo = build_field_memo(distinct_values(readable, CANONICAL_COLUMNS), cfg)
             data.human = dict(deps.human_decisions()) if deps.human_decisions else {}
             data.extra["cache_entries"] = deps.cache.count() if deps.cache is not None else 0
-            data.degraded = deps.llm is None or not deps.llm.is_available()
+            # Degraded_Mode is decided once per Run: provider unreachable, key missing, or no client.
+            if deps.llm is None:
+                available, reason = False, "no LLM_Client configured"
+            elif hasattr(deps.llm, "availability"):
+                available, reason = deps.llm.availability()
+            else:
+                available, reason = deps.llm.is_available(), None
+            data.degraded = not available
+            if data.degraded:
+                data.extra["degraded_reason"] = reason or "no LLM provider available"
             if not cfg.pipeline.legacy_b_lookup:
                 data.legacy_b_status, data.legacy_b_index = "disabled", {}
             elif deps.legacy_b is None:
@@ -182,10 +193,19 @@ def build_run_graph(deps: PipelineDeps, checkpointer: BaseCheckpointSaver | None
     def after_scan(state: RunState) -> dict:
         data = store.get(state["run_id"])
         unknown: dict = {}
+        rows = {r.source_row_id: r for r in data.rows}
+        key_rows: Counter = Counter()
+        spellings: dict[str, Counter] = {}
         for rid in sorted(data.scans):
             for uv in data.scans[rid].unknown_variants:
                 unknown.setdefault(uv.pattern_key, uv)
+                key_rows[uv.pattern_key] += 1
+                spellings.setdefault(uv.pattern_key, Counter())[rows[rid].values.get(uv.field, "")] += 1
         data.unknown = unknown
+        if unknown:
+            data.extra["run_stats"] = RunStats(key_rows=dict(key_rows),
+                                               key_spellings={k: dict(v) for k, v in spellings.items()},
+                                               field_values=_rule_decided_values(data.scans.values()))
         return {"unknown_keys": list(unknown)}
 
     def resolve(payload: dict) -> dict:
@@ -197,15 +217,31 @@ def build_run_graph(deps: PipelineDeps, checkpointer: BaseCheckpointSaver | None
             if deps.cache is not None:
                 data.cache_lookups += 1
                 hit = deps.cache.get_many([key]).get(key)
-                if hit is not None:
+                # Deterministic validator before any application, cached proposals included.
+                if hit is not None and validate_proposal(uv, LLMSuggestion(hit.decision, hit.value, hit.confidence,
+                                                                           hit.justification), cfg) is None:
                     data.cache_hits += 1
                     data.resolved[key] = hit
                     return {}
             if data.degraded or deps.resolver is None or data.kind == "reload":
                 data.llm_status[key] = "degraded"
                 return {}
-            suggestion, tokens = deps.resolver.propose(data.run_id, uv)
-            auto = uv.field in cfg.pipeline.resolver_auto_apply_fields
+            if hasattr(deps.resolver, "resolve"):
+                outcome = deps.resolver.resolve(data.run_id, uv, data.extra.get("run_stats"), cfg)
+                suggestion, tokens = outcome.suggestion, outcome.tokens
+                data.llm_traces[key] = outcome.trace()
+                ts = utcnow()
+                deps.decision_logger.write_tool_calls([
+                    ToolCallRecord(run_id=data.run_id, pattern_key=key, field=uv.field, iteration=c.iteration,
+                                   tool=c.tool, params=c.params(), result_summary=c.summary, timestamp=ts)
+                    for c in outcome.tool_calls])
+            else:
+                suggestion, tokens = deps.resolver.propose(data.run_id, uv)
+            failed = validate_proposal(uv, suggestion, cfg) if suggestion.confidence > 0 else None
+            if failed:
+                suggestion = LLMSuggestion("reject", None, 0.0, f"rejected by the deterministic validator: {failed}")
+            # Auto-application only for closed-dictionary fields listed in Rule_Config (decisions.md).
+            auto = uv.field in cfg.pipeline.resolver_auto_apply_fields and closed_values(uv.field, cfg) is not None
             if suggestion.confidence <= 0.0:
                 data.llm_status[key] = "failed"
                 data.llm_suggestions[key] = suggestion
@@ -244,7 +280,7 @@ def build_run_graph(deps: PipelineDeps, checkpointer: BaseCheckpointSaver | None
             data.ctx = RuleContext(
                 config=data.cfg, human_decisions=data.human, cache=dict(data.resolved),
                 llm_suggestions=dict(data.llm_suggestions), llm_status=dict(data.llm_status),
-                llm_tokens=dict(data.llm_tokens),
+                llm_tokens=dict(data.llm_tokens), llm_traces=dict(data.llm_traces),
                 vin_model_index={k: frozenset(v) for k, v in vin_models.items()},
                 legacy_b_model_index=data.legacy_b_index, shared_op_ids=shared, degraded=data.degraded,
                 memo=data.memo)
@@ -399,6 +435,18 @@ def build_run_graph(deps: PipelineDeps, checkpointer: BaseCheckpointSaver | None
     g.add_conditional_edges("report", after_report, ["await_humans", END])
     g.add_edge("await_humans", "init_run")
     return g.compile(checkpointer=checkpointer)
+
+
+def _rule_decided_values(scans) -> dict[str, dict[str, int]]:
+    """Values of each Unknown_Variant field already decided by the rules in this Run (tool statistics)."""
+    counts: dict[str, Counter] = {f: Counter() for f in ("originTool", "ecuName", "ecuCode", "Vehmodel")}
+    for s in scans:
+        i = s.identity
+        for f, v in (("originTool", i.diag_tool_name), ("ecuName", i.ecu_name), ("ecuCode", i.value_description),
+                     ("Vehmodel", s.matched_model)):
+            if v:
+                counts[f][v] += 1
+    return {f: dict(c) for f, c in counts.items()}
 
 
 def _load_reject(dec: RowDecision, constraint: str) -> RowDecision:

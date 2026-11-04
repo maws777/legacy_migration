@@ -40,3 +40,10 @@ if detail is not None:
         st.markdown(f"**{r.field}** {r.action} `{r.rule_id}` {r.reason} by {r.decided_by}"
                     f"{'' if r.confidence is None else f' (confidence {r.confidence:.2f})'}: "
                     f"`{r.before}` -> `{r.after}` - {r.explanation}")
+st.subheader("Resolver_Agent tool calls")
+calls = load("tool_calls", lambda: api.tool_calls(run_id))
+if calls is not None:
+    if not calls:
+        st.info("No tool call in this Run (no Unknown_Variant sent to the agent, or Degraded_Mode).")
+    else:
+        st.dataframe([c.model_dump(mode="json") for c in calls], use_container_width=True)

@@ -56,7 +56,8 @@ def test_key_value_never_reaches_logs_or_exports(tmp_path, monkeypatch, caplog):
 
     cfg = load_rule_config()
     p = MigrationPipeline(EDGE, var_dir=tmp_path / "v")
-    p.deps.llm = LLMClient(cfg.pipeline.llm, p.ops_engine, provider)
+    anthropic_cfg = cfg.pipeline.llm.model_copy(update={"provider": "anthropic", "model": "claude-haiku-4-5"})
+    p.deps.llm = LLMClient(anthropic_cfg, p.ops_engine, provider)
     p.seed_reference_mapping()
     try:
         info = p.start_campaign()

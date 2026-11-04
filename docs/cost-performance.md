@@ -26,7 +26,7 @@ Cost formula: `input tokens x price_eur_per_input_token + output tokens x price_
 
 ## Reading the figures
 
-- No `ANTHROPIC_API_KEY` was set on the machine that produced these Runs, so both ran in Degraded_Mode and made zero provider calls.
+- These Runs were made when Anthropic was the provider and no `ANTHROPIC_API_KEY` was set, so both ran in Degraded_Mode and made zero provider calls. The default provider is now a local Ollama model (`qwen2.5:7b`): its tokens are recorded, and its cost is 0 €.
 - Even with a key, the 10,000-row dataset would cost zero tokens: it contains no Unknown_Variant (all 12 Pattern_Keys are rule cases sent to humans: R3, R5, R6, R7, R8). The Resolver_Agent is only called for the distinct Unknown_Variant keys, as in the synthetic file (6 keys for 8 rows). With the fake LLM used in `tests/unit/test_agents.py`, that file costs 6 calls (120 tokens each) on a cold Run and 2 calls on the warm Run that follows.
 - Time drivers: the rules stage dominates; field-local results are computed once per distinct value (FieldMemo), batches are 1,000 rows, and loads use one transaction per batch.
 

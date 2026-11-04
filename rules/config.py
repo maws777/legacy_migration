@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -68,11 +69,19 @@ class ReferenceMapping(_Frozen):
 
 
 class LLMConfig(_Frozen):
-    model: str = "claude-haiku-4-5"
-    timeout_s: float = Field(20, gt=0)
+    provider: Literal["anthropic", "ollama"] = "ollama"
+    model: str = "qwen2.5:7b"
+    base_url: str = "http://localhost:11434"            # Ollama only
+    timeout_s: float = Field(60, gt=0)
     max_tokens: int = Field(150, ge=1)
+    # Prices apply to anthropic only; a local Ollama model costs 0 EUR (tokens are still recorded).
     price_eur_per_input_token: float = Field(ge=0)
     price_eur_per_output_token: float = Field(ge=0)
+
+    def price_per_token(self) -> tuple[float, float]:
+        if self.provider == "ollama":
+            return 0.0, 0.0
+        return self.price_eur_per_input_token, self.price_eur_per_output_token
 
 
 class ControlSampleConfig(_Frozen):
@@ -121,6 +130,7 @@ class PipelineConfig(_Frozen):
     hitl_example_rows: int = Field(5, ge=1)
     discovery_sample_size: int = Field(20, ge=1)
     resolver_auto_apply_fields: tuple[str, ...] = ("originTool", "ecuName", "Vehmodel", "ecuCode")
+    resolver_max_iterations: int = Field(3, ge=1, le=3)
     llm: LLMConfig
     control_sample: ControlSampleConfig = ControlSampleConfig()
     legacy_b: LegacyBSimConfig = LegacyBSimConfig()

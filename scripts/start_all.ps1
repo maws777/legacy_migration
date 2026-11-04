@@ -5,8 +5,9 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1
     powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -VarDir var\demo
-    powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -Source data\synthetic_edge_cases.csv -VarDir var\demo_edge -NoClient
+    powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1 -Source data\synthetic_edge_cases.csv -VarDir var\demo_edge -NoClient -NoLLM
 
+    -NoLLM starts the Orchestrator without any LLM call (Degraded_Mode on purpose).
     Stop everything with scripts\stop_all.ps1. Process ids are written to var\processes.json.
 #>
 param(
@@ -14,7 +15,8 @@ param(
     [string]$VarDir = "var",
     [string]$Vins = "client_app/vins.txt",
     [double]$Interval = 1.0,
-    [switch]$NoClient
+    [switch]$NoClient,
+    [switch]$NoLLM          # Orchestrator in Degraded_Mode on purpose (no LLM call)
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -40,7 +42,7 @@ $services = @(
     @{ Name = "Target_API :8003"; Port = 8003; Health = "/target/health"; Env = @{ TARGET_DB = $targetDb }
        Args = "-m uvicorn target.api:app --port 8003" },
     @{ Name = "Orchestrator :8000"; Port = 8000; Health = "/ops/phase"
-       Env = @{ MIGRATION_SOURCE = $Source; MIGRATION_VAR_DIR = $VarDir }
+       Env = @{ MIGRATION_SOURCE = $Source; MIGRATION_VAR_DIR = $VarDir; MIGRATION_NO_LLM = $(if ($NoLLM) { "1" } else { "" }) }
        Args = "-m uvicorn agents.orchestrator:app --port 8000" },
     @{ Name = "UI :8501"; Port = 8501; Health = $null; Env = @{ ORCHESTRATOR_URL = "http://127.0.0.1:8000" }
        Args = "-m streamlit run ui/app.py --server.port 8501 --server.headless true" }

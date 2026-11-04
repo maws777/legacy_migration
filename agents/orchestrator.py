@@ -22,7 +22,9 @@ from agents.schemas import (
 from rules.fields import normalize_vin
 from hitl.schemas import AnswerResult, HumanAnswer, HumanQuestion
 from reporting.decision_log import UnknownRunError, export_media_type
-from reporting.schemas import DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest
+from reporting.schemas import (
+    DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
+)
 from rules.errors import ErrorCode, error_payload
 from rules.types import Action, DecidedBy
 
@@ -108,8 +110,11 @@ def default_services() -> Services:
     var_dir = Path(os.environ.get("MIGRATION_VAR_DIR") or Path(paths.ops_db).parent)
     export_dir = var_dir / "exports" if os.environ.get("MIGRATION_VAR_DIR") else Path(paths.export_dir)
     legacy_b = ApiAgentLegacyB.from_url(urls.legacy_b, cfg)
-    pipeline = MigrationPipeline(source, var_dir=var_dir,
-                                 **({"legacy_b": legacy_b} if cfg.pipeline.legacy_b_lookup else {}))
+    components: dict[str, Any] = {"legacy_b": legacy_b} if cfg.pipeline.legacy_b_lookup else {}
+    if os.environ.get("MIGRATION_NO_LLM", "").strip() in ("1", "true", "yes"):
+        from agents.llm_client import NoLLM
+        components["llm"] = NoLLM("LLM disabled (MIGRATION_NO_LLM)")
+    pipeline = MigrationPipeline(source, var_dir=var_dir, **components)
     try:
         from migration.reconciliation import Reconciler
         factory = Reconciler.factory
@@ -187,6 +192,12 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
         run_or_404(run_id)
         filters = LogFilters(source_row=source_row, field=field, action=action, rule_id=rule_id, decided_by=decided_by)
         return svc().pipeline.decision_logger.query(run_id, filters, limit, offset)
+
+    @app.get("/ops/runs/{run_id}/tool-calls", response_model=list[ToolCallRecord])
+    def get_tool_calls(run_id: str, pattern_key: str | None = None) -> list[ToolCallRecord]:
+        """Resolver_Agent tool calls of a Run (tool, parameters, summarized result)."""
+        run_or_404(run_id)
+        return svc().pipeline.decision_logger.tool_calls(run_id, pattern_key)
 
     @app.get("/ops/runs/{run_id}/decisions/export")
     def export_decisions(run_id: str, format: Literal["json", "csv"] = "json") -> FileResponse:

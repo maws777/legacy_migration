@@ -12,7 +12,7 @@ from sqlalchemy import (
     insert, select, text,
 )
 
-from reporting.schemas import DECISION_FIELDS, DecisionPage, DecisionRecord, LogFilters
+from reporting.schemas import DECISION_FIELDS, DecisionPage, DecisionRecord, LogFilters, ToolCallRecord
 from rules.timeutil import iso_z, naive_utc
 from rules.types import ACTIONS, DECIDED_BY, ROW_FIELD, FieldDecision
 
@@ -44,6 +44,20 @@ Index("ix_decision_run_action", decision_log.c.run_id, decision_log.c.action)
 Index("ix_decision_run_rule", decision_log.c.run_id, decision_log.c.rule_id)
 Index("uq_decision_row_record", decision_log.c.run_id, decision_log.c.source_row, unique=True,
       sqlite_where=text("field = '_row'"), postgresql_where=text("field = '_row'"))
+
+# Resolver_Agent tool calls of a Run (tool, parameters, summarized result), one row per call.
+decision_tool_call = Table(
+    "decision_tool_call", LOG_MD,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("run_id", String(36), nullable=False, index=True),
+    Column("pattern_key", Text, nullable=False),
+    Column("field", String(32), nullable=False),
+    Column("iteration", Integer, nullable=False),
+    Column("tool", String(40), nullable=False),
+    Column("params", Text, nullable=False),
+    Column("result_summary", Text, nullable=False),
+    Column("timestamp", DateTime, nullable=False),
+)
 
 
 class DecisionLogError(Exception):
@@ -169,6 +183,25 @@ class DecisionLogger:
     @staticmethod
     def _record(r) -> DecisionRecord:
         return DecisionRecord(**{k: r[k] for k in DECISION_FIELDS})
+
+    # ---------------------------------------------------------------- Resolver_Agent tool calls
+    def write_tool_calls(self, records: Sequence[ToolCallRecord]) -> None:
+        if not records:
+            return
+        rows = [{**r.model_dump(), "timestamp": naive_utc(r.timestamp)} for r in records]
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(decision_tool_call), rows)
+        except Exception as exc:  # noqa: BLE001
+            raise DecisionLogError(records[0].run_id, 0, f"tool call log: {type(exc).__name__}") from exc
+
+    def tool_calls(self, run_id: str, pattern_key: str | None = None) -> list[ToolCallRecord]:
+        q = select(decision_tool_call).where(decision_tool_call.c.run_id == run_id)
+        if pattern_key:
+            q = q.where(decision_tool_call.c.pattern_key == pattern_key)
+        with self.engine.connect() as c:
+            rows = c.execute(q.order_by(decision_tool_call.c.id)).mappings().all()
+        return [ToolCallRecord(**{k: r[k] for k in ToolCallRecord.model_fields}) for r in rows]
 
     # ---------------------------------------------------------------- export / import
     def export(self, run_id: str, fmt: Literal["json", "csv"], out_dir: Path | str) -> Path:

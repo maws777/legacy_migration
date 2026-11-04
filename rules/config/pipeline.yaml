@@ -7,11 +7,18 @@ discovery_sample_size: 20
 # Fields whose LLM proposals may be applied automatically at or above the threshold
 # (closed dictionaries only, decisions.md). Other fields always go to a human.
 resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
+# Resolver_Agent: at most this many LLM turns (tool calls + final answer) per Pattern_Key (max 3).
+resolver_max_iterations: 3
 llm:
-  model: claude-haiku-4-5
-  timeout_s: 20
+  # provider: ollama (local, default) or anthropic (needs ANTHROPIC_API_KEY).
+  # To switch back to Anthropic: provider: anthropic and model: claude-haiku-4-5.
+  provider: ollama
+  model: qwen2.5:7b
+  base_url: http://localhost:11434      # Ollama only
+  timeout_s: 60                         # a local model can take several seconds on the first call
   max_tokens: 150
-  # Approximate Claude Haiku 4.5 list prices (USD 1 / 5 per million tokens) converted to EUR.
+  # Prices apply to anthropic only (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million
+  # tokens, converted to EUR). With ollama the cost is 0 EUR; tokens are still recorded.
   price_eur_per_input_token: 0.00000092
   price_eur_per_output_token: 0.0000046
 control_sample:

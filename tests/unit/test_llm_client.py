@@ -56,7 +56,8 @@ def raise_status():
 def make(tmp_path):
     def _make(behaviour):
         provider = Provider(behaviour)
-        cfg = LLMConfig(price_eur_per_input_token=0.0, price_eur_per_output_token=0.0, timeout_s=3)
+        cfg = LLMConfig(provider="anthropic", model="claude-haiku-4-5", price_eur_per_input_token=0.0,
+                        price_eur_per_output_token=0.0, timeout_s=3)
         return LLMClient(cfg, make_engine("sqlite:///:memory:"), provider), provider
     return _make
 

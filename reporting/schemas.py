@@ -45,6 +45,27 @@ class DecisionRecord(BaseModel):
         return iso_z(v)
 
 
+class ToolCallRecord(BaseModel):
+    """One Resolver_Agent tool call, traced in the decision log (decisions.md)."""
+    run_id: str
+    pattern_key: str
+    field: str
+    iteration: int
+    tool: str
+    params: str                     # JSON of the arguments
+    result_summary: str
+    timestamp: datetime
+
+    @field_validator("timestamp")
+    @classmethod
+    def _utc(cls, v: datetime) -> datetime:
+        return as_utc(v)  # type: ignore[return-value]
+
+    @field_serializer("timestamp")
+    def _ser_ts(self, v: datetime) -> str:
+        return iso_z(v)
+
+
 class LogFilters(BaseModel):
     source_row: int | None = None
     field: str | None = None

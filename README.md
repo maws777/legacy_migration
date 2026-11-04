@@ -25,26 +25,62 @@ Check the installation (about 40 seconds; the `dataset` tests use `data/legacy/h
 .venv\Scripts\python.exe -m pytest -q
 ```
 
-## LLM key (optional)
+## LLM provider (optional)
 
-The LLM client reads `ANTHROPIC_API_KEY` at each call. Without it, the pipeline runs in Degraded_Mode: same rule decisions, Unknown_Variants go to humans, and schema discovery proposes the reference Column_Mapping.
+The LLM is optional. The provider is set in `rules/config/pipeline.yaml` (`llm.provider`, `llm.model`, `llm.base_url`). The default is a local **Ollama** server with the model `qwen2.5:7b`: no key, no network call outside the laptop, cost 0 € (tokens are still counted).
+
+### Ollama (default)
+
+1. Install Ollama: `winget install Ollama.Ollama`, or the installer from https://ollama.com/download (Windows, macOS, Linux). On Windows it runs in the background after installation; otherwise start it with `ollama serve`.
+2. Download the model (about 4.7 GB):
+
+   ```powershell
+   ollama pull qwen2.5:7b
+   ```
+
+3. Check that the server answers and lists the model:
+
+   ```powershell
+   Invoke-RestMethod http://localhost:11434/api/tags | Select-Object -ExpandProperty models | Select-Object name
+   ```
+
+The LLM_Client calls `POST http://localhost:11434/api/chat` with a forced JSON answer (`"format": "json"`) and counts tokens from `prompt_eval_count` and `eval_count`. The first call can take several seconds while the model loads (`llm.timeout_s` is 60 s).
+
+### Switch back to Anthropic
+
+In `rules/config/pipeline.yaml`:
+
+```yaml
+llm:
+  provider: anthropic
+  model: claude-haiku-4-5
+```
+
+Then set the key (read at each call, never written anywhere). The cost uses `price_eur_per_input_token` and `price_eur_per_output_token` of the same file.
 
 ```powershell
 $env:ANTHROPIC_API_KEY = "sk-ant-..."          # this terminal only
 setx ANTHROPIC_API_KEY "sk-ant-..."            # persistent, for new terminals
 ```
 
-Never commit the key or write it in a file of the repository. The tests remove it automatically and never call the provider.
+Never commit the key or write it in a file of the repository.
+
+### Degraded_Mode
+
+If the chosen provider cannot be used when a Run starts (Ollama stopped or model not pulled, or no `ANTHROPIC_API_KEY` for anthropic), the Run continues in Degraded_Mode: same rule decisions, Unknown_Variants go to humans, schema discovery proposes the reference Column_Mapping. The end-of-run report gives the reason, for example `Degraded_Mode: Ollama unreachable at http://localhost:11434 (ConnectError); Unknown_Variants were sent to humans.` To run without any LLM on purpose, use `--no-llm` on the command line or `-NoLLM` with `scripts\start_all.ps1`.
+
+The tests never call a provider: the Anthropic key is removed and the Ollama transport is replaced by a simulated one.
 
 ## Validate the Column_Mapping (once per database folder)
 
-A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6). Discover it (LLM, or reference fallback without a key) and validate it as an operator:
+A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6). Discover it (proposed by the LLM, or the reference fallback when no provider is available) and validate it as an operator:
 
 ```powershell
 .venv\Scripts\python.exe -m migration schema --operator <your-name>
+.venv\Scripts\python.exe -m migration schema --operator <your-name> --no-llm    # reference mapping, no LLM
 ```
 
-Expected: the 10 source columns with their target attributes, then `Column_Mapping validated by <your-name>`. With the services running, the same step is `POST /ops/schema/discover` then `POST /ops/schema/validate` (see `docs/demo.md`).
+Expected: the 10 source columns with their target attributes, then `Column_Mapping validated by <your-name>`. If the LLM proposal maps a target attribute to zero or two columns, the command lists the conflicts and validates nothing; run it again with `--no-llm`. With the services running, the same step is `POST /ops/schema/discover` then `POST /ops/schema/validate` (see `docs/demo.md`).
 
 ## Run
 

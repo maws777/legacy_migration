@@ -155,6 +155,7 @@ class RunData:
     llm_suggestions: dict = field(default_factory=dict)
     llm_status: dict = field(default_factory=dict)
     llm_tokens: dict = field(default_factory=dict)
+    llm_traces: dict = field(default_factory=dict)      # Pattern_Key -> Resolver_Agent tool trace
     partials: dict = field(default_factory=dict)        # batch -> (vin models, op id usage)
     ctx: Any = None                                     # frozen rules.types.RuleContext
     decisions: dict = field(default_factory=dict)       # source_row_id -> RowDecision

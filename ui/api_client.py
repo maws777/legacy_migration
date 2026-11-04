@@ -7,7 +7,7 @@ import httpx
 
 from agents.schemas import PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
 from hitl.schemas import AnswerResult, HumanQuestion
-from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport
+from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
 
 
 class ApiCallError(Exception):
@@ -60,6 +60,11 @@ class OrchestratorClient:
         params = {k: v for k, v in filters.items() if v not in (None, "")}
         params.update(limit=limit, offset=offset)
         return DecisionPage(**self._call("query decision log", "GET", f"/ops/runs/{run_id}/decisions", params=params))
+
+    def tool_calls(self, run_id: str, pattern_key: str | None = None) -> list[ToolCallRecord]:
+        params = {"pattern_key": pattern_key} if pattern_key else None
+        return [ToolCallRecord(**r) for r in self._call("load agent tool calls", "GET",
+                                                        f"/ops/runs/{run_id}/tool-calls", params=params)]
 
     # ---------------------------------------------------------------- questions
     def questions(self, status: str = "open", run_id: str | None = None) -> list[HumanQuestion]:

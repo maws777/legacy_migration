@@ -23,8 +23,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--config", type=Path, default=DEFAULT_CONFIG_DIR)
     run.add_argument("--var", type=Path)
     run.add_argument("--operator", default=None)
+    run.add_argument("--no-llm", action="store_true",
+                     help="Degraded_Mode on purpose: no LLM call, Unknown_Variants go to humans")
     schema = sub.add_parser("schema", help="discover the Column_Mapping and validate it as OPERATOR")
     schema.add_argument("--operator", required=True)
+    schema.add_argument("--no-llm", action="store_true", help="propose the reference Column_Mapping, no LLM call")
     for p in (schema,):
         p.add_argument("--source", type=Path)
         p.add_argument("--config", type=Path, default=DEFAULT_CONFIG_DIR)
@@ -44,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
             components["legacy_b"] = ApiAgentLegacyB.from_url(cfg.pipeline.services.legacy_b, cfg)
     except ConfigError:
         pass                                   # the Run reports the configuration error
+    if getattr(args, "no_llm", False):
+        from agents.llm_client import NoLLM
+        components["llm"] = NoLLM()
     pipeline = MigrationPipeline(source, var_dir=var_dir, config_dir=args.config, **components)
     if args.cmd == "schema":
         try:

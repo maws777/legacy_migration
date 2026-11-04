@@ -30,10 +30,32 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip)
 
 
+class _NoOllama:
+    """Default Ollama transport in tests: every request fails as if the server were stopped."""
+
+    def handle_request(self, request):
+        import httpx
+        raise httpx.ConnectError("Ollama is disabled in the test suite", request=request)
+
+    def close(self):
+        pass
+
+
 @pytest.fixture(autouse=True)
-def _no_real_llm_key(monkeypatch):
-    """No test may reach the real LLM provider: the key is removed unless a test sets a fake one."""
+def _no_real_llm(monkeypatch):
+    """No test may reach a real LLM provider: no Anthropic key, and no real Ollama server.
+
+    Tests that need a provider inject a fake client or an httpx mock transport.
+    """
+    import httpx
+
+    from agents import llm_client
+
+    class Blocked(_NoOllama, httpx.BaseTransport):
+        pass
+
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(llm_client, "OLLAMA_TRANSPORT", Blocked())
 
 
 @pytest.fixture(scope="session")

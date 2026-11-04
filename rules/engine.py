@@ -142,17 +142,19 @@ class _Eval:
                                  human_explanation(used, "reject_group"), 0, used)
         if uv is not None:
             cached = ctx.cache.get(key)
+            trace = ctx.llm_traces.get(key)
             if cached is not None:
                 fresh = key in ctx.llm_tokens
                 tokens = ctx.llm_tokens.get(key, 0)
+                why = cached.justification + (f" {trace}" if fresh and trace else "")
                 if cached.decision == "map":
                     return FieldDecision(field, "CORRECT", rule_id, "LLM_VALUE" if fresh else "CACHE_VALUE", before,
                                          self.convert(field, cached.value), "llm", cached.confidence,
-                                         cached.justification, tokens, key)
+                                         why, tokens, key)
                 return FieldDecision(field, "REJECT", rule_id, "LLM_REJECT" if fresh else "CACHE_REJECT", before, "",
-                                     "llm", cached.confidence, cached.justification, tokens, key)
+                                     "llm", cached.confidence, why, tokens, key)
             self.unknown.append(uv)
-            explanation = f"{explanation} {self.llm_text(key)}"
+            explanation = f"{explanation} {self.llm_text(key)}" + (f" {trace}" if trace else "")
         return FieldDecision(field, "ASK_HUMAN", rule_id, reason, before, "", "rule", None, explanation, 0, key,
                              ctx.llm_suggestions.get(key))
 
