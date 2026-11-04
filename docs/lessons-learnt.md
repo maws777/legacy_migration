@@ -33,22 +33,21 @@ Rows can carry several anomalies, so the row counts above do not add up to the o
 
 ## Deviations from the Validation_Target
 
+No deviation occurred. Every measured count equals the Validation_Target, and `tests/integration/test_validation_target.py` checks them with a tolerance of 0.
+
 | Outcome | Measured | Validation_Target | Difference |
 |---|---|---|---|
-| MIGRATE | 6,942 | 6,940 | +2 |
-| CORRECT | 629 | 630 | -1 |
-| REJECT | 1,916 | 1,920 | -4 |
-| ASK_HUMAN | 513 | 510 | +3 |
+| MIGRATE | 6,942 | 6,942 | 0 |
+| CORRECT | 629 | 629 | 0 |
+| REJECT | 1,916 | 1,916 | 0 |
+| ASK_HUMAN | 513 | 513 | 0 |
 | REJECT OUT_OF_SCOPE | 990 | 990 | 0 |
 
-All counts are within the 5% tolerance; the targets are themselves approximate ("~" in `product.md`).
-
-Causes, as far as traced:
-
-- **R4 is skipped while the ValueDescription waits for a human.** 9 ASK_HUMAN rows have an undecided ecuCode (R3) and a ValueReference that R4 would reject for any code ID0002-ID0005. They stay ASK_HUMAN instead of REJECT until a human chooses the code. This explains part of REJECT -4 and ASK_HUMAN +3.
-- **The exact split between MIGRATE (+2) and CORRECT (-1) was not traced row by row.** The rules follow `migration-rules.md`; the reference counts were not given row by row, so the residual cannot be attributed with certainty.
+The first version of the target (~6,940 / ~630 / ~1,920 / ~510) gave rounded values. An independent calculation on the same file gives exactly 6,942 / 629 / 1,916 / 513, so the apparent gaps of +2 / -1 / -4 / +3 came only from that rounding. The steering files and the spec now hold the exact counts.
 
 ## Other lessons
+
+- **R4 waits for the ValueDescription.** 9 ASK_HUMAN rows have an undecided ecuCode (R3) and a ValueReference that R4 would reject for any code ID0002-ID0005. R4 runs only once the code is known, so these rows stay ASK_HUMAN until a human chooses the code, then become REJECT unless the code is ID0001.
 
 - **Homogeneous-group rule.** With "apply a value to the group" restricted to groups with the same raw value and label, most dataset questions only offer "reject the group" or "case by case" (for example the 46-row `ecuCode|FORMAT2_NO_DID` group). This protects data quality but makes "case by case" the main path for large groups.
 - **Line endings.** The CSV is stored with LF in Git and checked out with CRLF on Windows (`core.autocrlf=true`); the reader accepts both, and the decision counts do not depend on it.

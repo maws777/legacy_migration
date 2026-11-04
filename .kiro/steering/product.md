@@ -27,12 +27,12 @@ Legacy A is a vehicle-diagnostics system whose export is a dirty CSV: two record
 
 | Outcome | Expected |
 |---|---|
-| Migrated automatically | ~6,940 |
-| Automatically corrected | ~630 |
-| Rejected (incl. ~990 out of scope) | ~1,920 |
-| Requiring human decision | ~510 |
+| Migrated automatically | 6,942 |
+| Automatically corrected | 629 |
+| Rejected (incl. 990 out of scope) | 1,916 |
+| Requiring human decision | 513 |
 
-The four outcomes are disjoint and sum to 10,000. They are computed with the Legacy B lookup disabled. Scale target: 100,000 rows in a few minutes. Cost reference from the brief: ~1,200 tokens per 100k records.
+The four outcomes are disjoint and sum to 10,000. They are computed with the Legacy B lookup disabled. These are exact counts, confirmed by an independent calculation on the same file; the earlier values (~6,940 / ~630 / ~1,920 / ~510) were rounded. Scale target: 100,000 rows in a few minutes. Cost reference from the brief: ~1,200 tokens per 100k records.
 
 ## End-of-run report (exact format)
 

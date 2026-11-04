@@ -104,7 +104,7 @@ Requirements 11 and 12 read Legacy B models only through the read-only Legacy_B_
 - **Gap**: an expected target record, derived from Legacy A rows with Row_Outcome MIGRATE or CORRECT, that is missing from the Target_DB or differs from the stored record.
 - **Control_Sample**: a fixed set of VINs selected from Rule_Config size and seed, identical across Runs.
 - **Aligned_Percentage**: aligned compared records divided by compared records, as a percentage.
-- **Validation_Target**: the expected outcome counts on the 10,000-row dataset listed in `product.md` (MIGRATE 6,940, CORRECT 630, REJECT 1,920 incl. OUT_OF_SCOPE 990, ASK_HUMAN 510), computed with the Legacy_B_Lookup disabled.
+- **Validation_Target**: the expected outcome counts on the 10,000-row dataset listed in `product.md` (MIGRATE 6,942, CORRECT 629, REJECT 1,916 incl. OUT_OF_SCOPE 990, ASK_HUMAN 513, exact counts), computed with the Legacy_B_Lookup disabled.
 
 ## Requirements
 

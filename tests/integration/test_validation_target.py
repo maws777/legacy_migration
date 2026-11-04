@@ -13,8 +13,8 @@ from migration.pipeline import MigrationPipeline
 from rules.config import CONFIG_FILES, DEFAULT_CONFIG_DIR
 
 pytestmark = [pytest.mark.integration, pytest.mark.dataset]
-TARGET = {"MIGRATE": 6940, "CORRECT": 630, "REJECT": 1920, "ASK_HUMAN": 510, "OUT_OF_SCOPE": 990}
-TOLERANCE = float(os.environ.get("VALIDATION_TOLERANCE", "0.05"))
+TARGET = {"MIGRATE": 6942, "CORRECT": 629, "REJECT": 1916, "ASK_HUMAN": 513, "OUT_OF_SCOPE": 990}
+TOLERANCE = float(os.environ.get("VALIDATION_TOLERANCE", "0"))   # exact counts by default
 OUT = Path(__file__).resolve().parents[2] / "var" / "validation_deviation.json"
 
 

@@ -80,7 +80,7 @@ Only ID0001-ID0005 are allowed.
 
 - **Format 1**: `ecuCode` in {ID0001...ID0005} is used as is. The label is ignored; a code/label inconsistency is logged as informational.
 - **Format 2**: the DID is extracted from the label: F187 -> ID0002, F191 -> ID0003, F188 -> ID0004, F012 -> ID0005.
-- Any other DID (e.g. "Paramètre diagnostic ... (F738)", ~990 rows) -> **reject, out of scope** ("only useful data").
+- Any other DID (e.g. "Paramètre diagnostic ... (F738)", 990 rows) -> **reject, out of scope** ("only useful data").
 - **Empty `ecuCode`**: deduce from the DID in the label if present, or ID0001 if the label is one of "Lecture identifiant châssis", "Identification véhicule", "Numéro identification véhicule", "Identifiant véhicule usine". Otherwise -> **human**.
 
 ### R4 - ValueReference
@@ -150,4 +150,4 @@ Reject the row if any check fails:
 
 ## Expected result (validation target)
 
-~6,940 migrated, ~630 corrected, ~1,920 rejected (incl. ~990 out of scope), ~510 ASK_HUMAN. The four outcomes are disjoint and sum to 10,000. Computed with the Legacy B lookup disabled.
+6,942 migrated, 629 corrected, 1,916 rejected (incl. 990 out of scope), 513 ASK_HUMAN. The four outcomes are disjoint and sum to 10,000. Computed with the Legacy B lookup disabled. Exact counts, confirmed by an independent calculation on the same file (the earlier values ~6,940 / ~630 / ~1,920 / ~510 were rounded).

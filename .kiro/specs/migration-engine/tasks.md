@@ -141,7 +141,7 @@ Test conventions for every task:
   - _Requirements: 32.1, 32.2, 32.3, 32.4, 32.5, 32.6, 32.7, 32.8, 32.9_
 
 - [x] 13. [Group 8] Add the validation-target test and write the Project_Docs
-  - `tests/integration/test_validation_target.py` (`dataset`, skipped while the CSV is absent): Run on the 10,000-row file with an empty Human_Decision_Store and Legacy_B_Lookup disabled; counts sum to 10,000; OUT_OF_SCOPE count reported; each count compared with the Validation_Target within `VALIDATION_TOLERANCE` (default 5%); deviations written to `var/validation_deviation.json`
+  - `tests/integration/test_validation_target.py` (`dataset`, skipped while the CSV is absent): Run on the 10,000-row file with an empty Human_Decision_Store and Legacy_B_Lookup disabled; counts sum to 10,000; OUT_OF_SCOPE count reported; each count compared with the Validation_Target within `VALIDATION_TOLERANCE` (default 0: exact match); deviations written to `var/validation_deviation.json`
   - `docs/architecture.md`: each choice with its justification and at least one rejected alternative, seeded from design "Key Decisions" and covering the topics listed in Requirement 35.1
   - `docs/cost-performance.md`: at least two Runs with different row counts (for example a synthetic fixture and the dataset), values copied from `GET /ops/runs/{run_id}/metrics`: run_id, rows, seconds, tokens, cost, tokens per 100,000 records and the difference from 1,200, distinct Pattern_Keys, batch size, cache hit rate as a percentage
   - `docs/lessons-learnt.md`: each anomaly found with its field and the decision taken; each Validation_Target deviation with the measured value, the signed difference and the cause, or an explicit statement that no deviation occurred
