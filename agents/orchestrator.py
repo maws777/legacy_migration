@@ -4,6 +4,7 @@ Run: ``uvicorn agents.orchestrator:app --port 8000``. Services are built on the 
 """
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -102,8 +103,12 @@ def default_services() -> Services:
     from rules.config import load_rule_config
     cfg = load_rule_config()
     paths, urls = cfg.pipeline.paths, cfg.pipeline.services
+    # MIGRATION_SOURCE / MIGRATION_VAR_DIR let scripts/start_all.ps1 serve another campaign (e.g. edge cases).
+    source = os.environ.get("MIGRATION_SOURCE") or paths.source_csv
+    var_dir = Path(os.environ.get("MIGRATION_VAR_DIR") or Path(paths.ops_db).parent)
+    export_dir = var_dir / "exports" if os.environ.get("MIGRATION_VAR_DIR") else Path(paths.export_dir)
     legacy_b = ApiAgentLegacyB.from_url(urls.legacy_b, cfg)
-    pipeline = MigrationPipeline(paths.source_csv, var_dir=Path(paths.ops_db).parent,
+    pipeline = MigrationPipeline(source, var_dir=var_dir,
                                  **({"legacy_b": legacy_b} if cfg.pipeline.legacy_b_lookup else {}))
     try:
         from migration.reconciliation import Reconciler
@@ -112,11 +117,16 @@ def default_services() -> Services:
         factory = None
     return build_services(pipeline, legacy_a=LegacyAClient.from_url(urls.legacy_a), legacy_b=legacy_b,
                           target=httpx.Client(base_url=urls.target, timeout=5.0),
-                          export_dir=Path(paths.export_dir), reconciler_factory=factory)
+                          export_dir=export_dir, reconciler_factory=factory)
+
+
+class UTF8JSONResponse(JSONResponse):
+    """Explicit charset so Windows PowerShell 5.1 ``Invoke-RestMethod`` decodes "≈", "€" and accents."""
+    media_type = "application/json; charset=utf-8"
 
 
 def create_app(services: Services | Callable[[], Services] | None = None) -> FastAPI:
-    app = FastAPI(title="Orchestrator")
+    app = FastAPI(title="Orchestrator", default_response_class=UTF8JSONResponse)
     lock = threading.Lock()
     holder: dict[str, Services] = {}
     factory = services if callable(services) else (lambda: services) if services is not None else default_services
