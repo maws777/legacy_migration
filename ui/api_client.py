@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from agents.schemas import PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
+from agents.schemas import ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, TransitionLogEntry, TransitionResult
 from hitl.schemas import AnswerResult, HumanQuestion
 from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport
 
@@ -60,6 +60,22 @@ class OrchestratorClient:
         params = {k: v for k, v in filters.items() if v not in (None, "")}
         params.update(limit=limit, offset=offset)
         return DecisionPage(**self._call("query decision log", "GET", f"/ops/runs/{run_id}/decisions", params=params))
+
+    # ---------------------------------------------------------------- schema mapping
+    def schema_mapping(self) -> ColumnMapping | None:
+        try:
+            return ColumnMapping(**self._call("load schema mapping", "GET", "/ops/schema/mapping"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def discover_schema(self) -> SchemaProposal:
+        return SchemaProposal(**self._call("discover schema", "POST", "/ops/schema/discover"))
+
+    def validate_schema(self, proposal_id: str, operator: str) -> ColumnMapping:
+        return ColumnMapping(**self._call("validate schema mapping", "POST", "/ops/schema/validate",
+                                          json={"proposal_id": proposal_id, "operator": operator}))
 
     # ---------------------------------------------------------------- questions
     def questions(self, status: str = "open", run_id: str | None = None) -> list[HumanQuestion]:

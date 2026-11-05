@@ -12,9 +12,10 @@ llm:
   base_url: http://127.0.0.1:11434
   timeout_s: 120
   max_tokens: 150
-  # Local inference has no provider token charge; electricity is not included.
-  price_eur_per_input_token: 0
-  price_eur_per_output_token: 0
+  # Illustrative accounting rates only; Ollama does not charge per token.
+  # Equivalent to 1 EUR / million input tokens and 5 EUR / million output tokens.
+  price_eur_per_input_token: 0.000001
+  price_eur_per_output_token: 0.000005
 control_sample:
   size: 50
   seed: 42

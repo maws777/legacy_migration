@@ -25,6 +25,35 @@ c2.metric("Runs", len(runs))
 c3.metric("Open questions", sum(1 for _ in (load("q_home", api.questions) or [])))
 
 st.subheader("Campaigns")
+st.subheader("Source schema")
+mapping = load("schema_mapping", api.schema_mapping)
+if mapping:
+    st.success(f"Column mapping validated by {mapping.validated_by}.")
+else:
+    st.info("Discover and validate the source-column mapping before starting a migration.")
+
+if st.button("Discover schema mapping"):
+    proposal = act(api.discover_schema)
+    if proposal:
+        st.session_state["schema_proposal"] = proposal
+
+proposal = st.session_state.get("schema_proposal")
+if proposal:
+    st.caption("Proposal source: reference mapping (LLM unavailable or invalid response)." if proposal.fallback
+               else "Proposal source: local LLM.")
+    st.dataframe([{"Source column": source, "Target attribute": target or "—"}
+                  for source, target in proposal.column_mapping.items()], use_container_width=True, hide_index=True)
+    if proposal.conflicts:
+        st.error("This proposal has conflicts and cannot be validated.")
+        st.dataframe([conflict.model_dump() for conflict in proposal.conflicts], use_container_width=True,
+                     hide_index=True)
+    elif st.button("Validate this mapping"):
+        validated = act(lambda: api.validate_schema(proposal.proposal_id, op))
+        if validated:
+            st.session_state["schema_mapping"] = validated
+            st.session_state.pop("schema_proposal", None)
+            st.success(f"Column mapping validated by {validated.validated_by}.")
+
 if st.button("Start a campaign (Run 1)"):
     info = act(lambda: api.start_campaign(op))
     if info:

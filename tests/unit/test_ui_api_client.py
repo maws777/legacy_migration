@@ -14,6 +14,9 @@ Q = {"question_id": "q1", "run_id": "r1", "pattern_key": "ecuName|UNREADABLE", "
      "llm_suggestion": None, "llm_status": "not_applicable", "allowed_values": ["BCM"],
      "options": ["reject_group", "case_by_case"], "status": "open", "parent_question_id": None,
      "created_at": NOW, "closed_at": None}
+SCHEMA_PROPOSAL = {"proposal_id": "p1", "column_mapping": {"VIN": "Vehicle.VIN"}, "formats": [],
+                   "format_criterion": "criteria", "conflicts": [], "fallback": True, "created_at": NOW}
+SCHEMA_MAPPING = {"mapping": {"VIN": "Vehicle.VIN"}, "validated_by": "op", "validated_at": NOW}
 
 
 def make(routes):
@@ -30,6 +33,9 @@ def make(routes):
 def test_calls_are_typed():
     api, seen = make({
         ("GET", "/ops/runs"): (200, [RUN]),
+        ("GET", "/ops/schema/mapping"): (200, SCHEMA_MAPPING),
+        ("POST", "/ops/schema/discover"): (200, SCHEMA_PROPOSAL),
+        ("POST", "/ops/schema/validate"): (200, SCHEMA_MAPPING),
         ("POST", "/ops/campaigns"): (202, RUN),
         ("POST", "/ops/campaigns/c1/resume"): (202, RUN),
         ("GET", "/ops/questions"): (200, [Q]),
@@ -41,6 +47,10 @@ def test_calls_are_typed():
                                                   "reason": "cannot be skipped"}),
     })
     assert api.runs()[0].run_id == "r1"
+    assert api.schema_mapping().validated_by == "op"
+    assert api.discover_schema().proposal_id == "p1"
+    assert api.validate_schema("p1", "op").mapping == {"VIN": "Vehicle.VIN"}
+    assert json.loads(seen[3][3]) == {"proposal_id": "p1", "operator": "op"}
     assert api.start_campaign("op").campaign_status == "paused"
     assert api.resume("c1", "op").run_id == "r1"
     assert api.questions()[0].pattern_key == "ecuName|UNREADABLE"
@@ -77,3 +87,9 @@ def test_unreachable_api():
 def test_latest_reconciliation_none_on_404():
     api, _ = make({("GET", "/ops/reconciliation/latest"): (404, {"error": {"code": "NOT_FOUND", "message": "none"}})})
     assert api.latest_reconciliation() is None
+
+
+def test_schema_mapping_none_until_validated():
+    api, _ = make({("GET", "/ops/schema/mapping"): (404, {"error": {"code": "NOT_FOUND",
+                                                                        "message": "no validated mapping"}})})
+    assert api.schema_mapping() is None

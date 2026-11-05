@@ -22,7 +22,7 @@ The following are historical measurements copied from `GET /ops/runs/{run_id}/me
 
 Stage times of the dataset Run (seconds): ingestion 0.078, rules 1.817, AI resolution 0.000, human routing 0.104, load 0.377, reporting 0.096. The other 3.0 s are not timed per stage: decision-log writes, LangGraph checkpoints and graph overhead.
 
-The table's cost formula used the former Anthropic prices (0.00000092 and 0.0000046 EUR per input/output token, respectively). Current Ollama price settings in `rules/config/pipeline.yaml` are zero; local electricity and hardware costs are not measured.
+The historical table's cost formula used the former Anthropic prices (0.00000092 and 0.0000046 EUR per input/output token, respectively). Current reports use illustrative accounting rates from `rules/config/pipeline.yaml`: €0.000001 per input token (€1 per million) and €0.000005 per output token (€5 per million). These rates only give a hypothetical euro equivalent; Ollama has no per-token provider charge. Local electricity and hardware costs are not measured. Previously saved reports are unchanged; new Runs use the configured rates.
 
 ## Reading the figures
 

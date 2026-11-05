@@ -27,6 +27,8 @@ def test_defaults_and_dictionaries():
     assert p.llm.model == "qwen2.5:3b"
     assert p.llm.base_url == "http://127.0.0.1:11434"
     assert p.llm.timeout_s == 120
+    assert p.llm.price_eur_per_input_token == 0.000001
+    assert p.llm.price_eur_per_output_token == 0.000005
     assert p.discovery_sample_size == 20
     assert p.legacy_b.seed == 2026 and p.legacy_b.conflicts == 15
     assert p.control_sample.size == 50

@@ -34,11 +34,13 @@ ollama pull qwen2.5:3b
 ollama list
 ```
 
-The default endpoint is `http://127.0.0.1:11434`; model, endpoint, timeout, and token pricing are configured in `rules/config/pipeline.yaml`. Local inference has no provider token charge (electricity and hardware are not included). If Ollama is stopped or the configured model is not downloaded, the migration continues in Degraded_Mode: deterministic and saved human decisions still apply, unknown variants go to humans, and schema discovery uses the reference mapping.
+The default endpoint is `http://127.0.0.1:11434`; model, endpoint, timeout, and illustrative token accounting rates are configured in `rules/config/pipeline.yaml`. Ollama does not charge per token: the report's estimated euro amount is a hypothetical comparison (currently €1 per million input tokens and €5 per million output tokens), not a provider bill. Electricity and hardware costs are not included. If Ollama is stopped or the configured model is not downloaded, the migration continues in Degraded_Mode: deterministic and saved human decisions still apply, unknown variants go to humans, and schema discovery uses the reference mapping.
 
 ## Validate the Column_Mapping (once per database folder)
 
 A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6). With Ollama running, discover it using the local model; otherwise, discovery uses the reference fallback. Validate it as an operator:
+
+In the UI, open Home, click **Discover schema mapping**, review the proposed source-to-target columns, then click **Validate this mapping**. Conflicts must be resolved before validation. The proposal indicates whether it came from the local LLM or the reference fallback.
 
 ```powershell
 .venv\Scripts\python.exe -m migration schema --operator <your-name>
