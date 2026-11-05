@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from agents.jobs import Job, JobConflict, JobManager
 from agents.question_advisor import AdviceToolCall, AdvisorContext, QuestionAdvice, QuestionAdvisor
 from agents.schemas import (
-    ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
+    ChatRequest, ChatResponse, ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
     SchemaProposal, SchemaReference, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
 )
 from rules.fields import normalize_vin
@@ -263,6 +263,14 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
             raise ApiError(409, "CONFLICT", str(exc)) from None
         except ValueRejected as exc:
             raise ApiError(422, "VALIDATION_ERROR", exc.failed_rule, {"failed_rule": exc.failed_rule}) from None
+
+    # ---------------------------------------------------------------- Query_Agent (bonus chat)
+    @app.post("/ops/chat", response_model=ChatResponse)
+    def chat(body: ChatRequest) -> ChatResponse:
+        """Natural-language question -> one validated read-only SELECT on the Target_DB (Requirement 33)."""
+        from agents.query_agent import QueryAgent
+        p = svc().pipeline
+        return QueryAgent(p.ensure_llm(), p.config(), p.var_dir / "target.db").ask(body.question, body.consumer)
 
     # ---------------------------------------------------------------- Question_Advisor
     @app.post("/ops/questions/{question_id}/advise", status_code=202, response_model=Job)

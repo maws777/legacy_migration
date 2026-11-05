@@ -8,7 +8,7 @@ import httpx
 from agents.jobs import Job
 from agents.question_advisor import QuestionAdvice
 from agents.schemas import (
-    ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
+    ChatResponse, ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
 )
 from hitl.schemas import AnswerResult, HumanQuestion
 from reporting.schemas import CostBreakdown, DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
@@ -124,6 +124,12 @@ class OrchestratorClient:
         params = {"pattern_key": pattern_key} if pattern_key else None
         return [ToolCallRecord(**r) for r in self._call("load agent tool calls", "GET",
                                                         f"/ops/runs/{run_id}/tool-calls", params=params)]
+
+    # ---------------------------------------------------------------- Query_Agent (bonus chat)
+    def chat(self, question: str, timeout_s: float = 300.0) -> ChatResponse:
+        """Synchronous: generating SQL with a local model takes several seconds, hence the longer timeout."""
+        return ChatResponse(**self._call("ask the chat", "POST", "/ops/chat", json={"question": question},
+                                         timeout=timeout_s))
 
     # ---------------------------------------------------------------- Question_Advisor
     def advise_job(self, question_id: str, operator: str | None) -> Job:

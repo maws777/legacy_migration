@@ -85,6 +85,7 @@ class ModelReference(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str
+    consumer: Literal["ui", "legacy_b"] = "ui"          # Requirement 33.5: same checks for Legacy B consumers
 
 
 class ChatResponse(BaseModel):
@@ -94,6 +95,8 @@ class ChatResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     error: ErrorBody | None = None
+    columns: list[str] = []
+    seconds: float = 0.0
 
 
 # ---------------------------------------------------------------- phases (task 9)

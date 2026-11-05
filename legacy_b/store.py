@@ -19,5 +19,8 @@ class LegacyBStore:
     def get(self, chassis_no: str) -> LegacyBRecord | None:
         return self._by_chassis.get(chassis_no)
 
+    def records(self) -> list[LegacyBRecord]:
+        return list(self._by_chassis.values())
+
     def __len__(self) -> int:
         return len(self._by_chassis)

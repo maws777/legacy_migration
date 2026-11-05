@@ -277,3 +277,35 @@ def test_stats_page_shows_the_cost_by_purpose():
     assert labels["Coût équivalent cloud"] == "0.0032 €" and labels["Tokens (tous usages)"] == "2,562"
     assert labels["Coût réel (ollama qwen2.5:7b)"] == "0.0000 €"
     assert any(s.value == "Target_DB" for s in at.subheader)
+
+
+# ---------------------------------------------------------------- bonus chat (part 5)
+def test_chat_page_shows_sql_rows_and_errors():
+    from agents.schemas import ChatResponse
+    from rules.errors import ErrorBody
+
+    class ChatApi(FakeApi):
+        def __init__(self):
+            super().__init__()
+            self.asked = []
+
+        def chat(self, question, timeout_s=300.0):
+            self.asked.append(question)
+            if "delete" in question:
+                return ChatResponse(sql="DELETE FROM vehicle", rows=[], truncated=False, input_tokens=400,
+                                    output_tokens=10, seconds=3.0,
+                                    error=ErrorBody(code="REFUSED", message="validate_sql: non-SELECT statement"))
+            return ChatResponse(sql="SELECT vehicle_model, COUNT(*) AS n FROM vehicle GROUP BY vehicle_model",
+                                rows=[{"vehicle_model": "CLIO", "n": 2}], columns=["vehicle_model", "n"],
+                                truncated=False, input_tokens=900, output_tokens=40, seconds=6.4)
+
+    api = ChatApi()
+    at = app(api, page="ui/pages/5_chat.py").run()
+    button(at, "How many vehicles").click().run()
+    assert api.asked == ["How many vehicles are there for each vehicle model?"]
+    assert at.code[0].value.startswith("SELECT vehicle_model") and len(at.dataframe) == 1
+    assert any("940 tokens" in c.value and "6.4 s" in c.value for c in at.caption)
+    at.chat_input[0].set_value("delete everything").run()
+    assert api.asked[-1] == "delete everything"
+    assert any("non-SELECT statement" in e.value for e in at.error)
+    assert len(at.code) == 2                                      # the history is kept on rerun

@@ -153,7 +153,7 @@ Test conventions for every task:
     - Record the elapsed time, row count, CPU model and RAM size in `docs/cost-performance.md`
     - _Requirements: 34.1, 34.5_
 
-  - [ ]* 14.2 Implement the Query_Agent and the bonus chat
+  - [x]* 14.2 Implement the Query_Agent and the bonus chat
     - `agents/query_agent.py`: LangGraph graph; question length 1 to 1,000 characters after trimming, checked before any LLM call; SQL generated through `LLMClient`; `sqlglot` validation (one statement, SELECT only, allow-listed tables including joins and subqueries); execution on `file:var/target.db?mode=ro` with a `sqlite3` authorizer; row limit and truncated flag; token counts; error naming the failed step; "chat unavailable" in Degraded_Mode
     - `POST /ops/chat` in `agents/orchestrator.py`, active when `query_agent.enabled` is true; `ui/pages/5_chat.py` and the chat call in `ui/api_client.py`
     - Tests: `tests/unit/test_query_agent.py` (SELECT accepted; DML, DDL, multi-statement and foreign-table SQL refused; length errors without an LLM call)

@@ -19,7 +19,9 @@ py -3.11 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Check the installation (about 40 seconds; the `dataset` tests use `data/legacy/hackathon-2026-digital-continuity-dataset.csv`, which is in the repository):
+An existing `.venv` must run the `pip install -r requirements.txt` line again after a pull: the chat added `sqlglot`.
+
+Check the installation (about 90 seconds; the `dataset` tests use `data/legacy/hackathon-2026-digital-continuity-dataset.csv`, which is in the repository):
 
 ```powershell
 .venv\Scripts\python.exe -m pytest -q
@@ -123,6 +125,9 @@ Other commands:
 
 - `.venv\Scripts\python.exe -m legacy_b.simulator`: regenerate the Legacy B data and the control file of the 15 planted conflicts (`legacy_b/data/`).
 - `powershell -ExecutionPolicy Bypass -File scripts\prepare_edge_demo.ps1 -Reset`: prepare a campaign on `data/synthetic_edge_cases.csv` to show "apply a value to the group" (see `docs/demo.md`).
+- `powershell -ExecutionPolicy Bypass -File scripts\legacy_b_asks.ps1 -VarDir var\demo`: the Legacy B agent writes three questions of its own, sends them to the chat (`POST /ops/chat`, consumer `legacy_b`) and prints the SQL, the rows and the comparison with its own models (`-NoLLM`: fixed questions).
+
+Chat (bonus): the UI page "chat" sends a question in natural language to the Query_Agent, which writes one SQL SELECT, checks it with `sqlglot` (one statement, SELECT only, allow-listed target tables) and runs it on a read-only connection to `<VarDir>/target.db`. It answers "chat unavailable" in Degraded_Mode and is switched off with `query_agent.enabled: false`.
 
 Configuration lives in `rules/config/*.yaml` (dictionaries, mappings, Column_Mapping reference, confidence threshold, batch size, Legacy B switch, prices, service URLs).
 

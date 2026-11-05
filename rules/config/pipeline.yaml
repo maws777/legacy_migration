@@ -41,8 +41,9 @@ services:
 client_app:
   interval_s: 1.0
   timeout_s: 5.0
+# Query_Agent (bonus chat, Requirement 33): natural language -> one read-only SELECT on the Target_DB.
 query_agent:
-  enabled: false
+  enabled: true
   row_limit: 200
 paths:
   source_csv: data/legacy/hackathon-2026-digital-continuity-dataset.csv
