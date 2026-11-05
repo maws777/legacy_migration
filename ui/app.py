@@ -18,4 +18,5 @@ st.navigation([
     st.Page("pages/5_Decisions.py", title="Décisions", icon="🗂️"),
     st.Page("pages/3_Journal.py", title="Journal", icon="📒"),
     st.Page("pages/4_Bascule.py", title="Bascule", icon="🔀"),
+    st.Page("pages/5_chat.py", title="Interroger les données", icon="💭"),
 ]).run()

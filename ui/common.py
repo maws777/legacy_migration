@@ -175,7 +175,7 @@ def show_failure(job) -> None:
 def auto_refresh(jobs: list) -> None:
     """Rerun the page every few seconds while a job is active (call it at the end of the page)."""
     period = refresh_seconds()
-    if period > 0 and (jobs or st.session_state.get("_watched")):
+    if period > 0 and jobs:
         time.sleep(period)
         st.rerun()
 

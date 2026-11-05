@@ -4,7 +4,7 @@ from __future__ import annotations
 from sqlalchemy import Column, Engine, MetaData, String, Table, Text, delete, insert, select
 
 from reporting.decision_log import UnknownRunError
-from reporting.schemas import RunReport
+from reporting.schemas import PURPOSE_LABELS, CostBreakdown, RunReport
 
 SEPARATOR = "─────────────────────────"
 
@@ -35,9 +35,18 @@ class ReportGenerator:
         REPORT_MD.create_all(engine)
 
     @staticmethod
+    def with_cost(report: RunReport, cost: CostBreakdown) -> RunReport:
+        """The report with its AI usage taken from ``cost`` (tokens, real cost, by purpose, cloud equivalent)."""
+        updated = report.model_copy(update={
+            "tokens": cost.tokens, "cost_eur": cost.real_cost_eur, "tokens_by_purpose": cost.tokens_by_purpose(),
+            "provider": f"{cost.provider} {cost.model}", "cloud_reference": cost.cloud_reference,
+            "cloud_equivalent_cost_eur": cost.cloud_equivalent_cost_eur})
+        return updated.model_copy(update={"text": ReportGenerator.format_text(updated)})
+
+    @staticmethod
     def compose(run_id: str, *, analysed: int, counts: dict[str, int], out_of_scope: int, traced_rows: int,
                 input_tokens: int, output_tokens: int, price_in: float, price_out: float, seconds: float,
-                loaded: int, cache_state: str, notes: list[str]) -> RunReport:
+                loaded: int, cache_state: str, notes: list[str], cost: CostBreakdown | None = None) -> RunReport:
         traced = 100.0 if analysed == 0 else 100.0 * traced_rows / analysed
         reject = counts.get("REJECT", 0)
         report = RunReport(
@@ -49,6 +58,8 @@ class ReportGenerator:
             coverage_pct=0.0 if analysed == 0 else round(100.0 * loaded / analysed, 1),
             rejected_out_of_scope=out_of_scope, rejected_error=reject - out_of_scope,
             pending_human=counts.get("ASK_HUMAN", 0), cache_state=cache_state)  # type: ignore[arg-type]
+        if cost is not None:
+            return ReportGenerator.with_cost(report, cost)
         return report.model_copy(update={"text": ReportGenerator.format_text(report)})
 
     @staticmethod
@@ -72,6 +83,11 @@ class ReportGenerator:
             f" pending human decision: {r.pending_human:,}",
             f"Run type: {r.cache_state} ({'empty' if r.cache_state == 'cold' else 'filled'} Resolution_Cache)",
         ]
+        if r.tokens_by_purpose:
+            parts = ", ".join(f"{PURPOSE_LABELS.get(p, p)} {n:,}" for p, n in r.tokens_by_purpose.items())
+            extra.append(f"AI usage by purpose (tokens): {parts}")
+            extra.append(f"Cloud-equivalent cost ({r.cloud_reference} prices): {r.cloud_equivalent_cost_eur:.4f} € "
+                         f"(real cost {r.cost_eur:.4f} € with {r.provider})")
         return "\n".join(lines + [""] + extra + list(r.notes))
 
     def save(self, report: RunReport) -> None:

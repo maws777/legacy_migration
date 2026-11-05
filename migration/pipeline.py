@@ -9,7 +9,9 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from agents.api_agent_legacy import LocalLegacyASource, SchemaDiscoveryAgent, mapping_provider_for
-from agents.llm_client import LLMClient
+from agents.llm_client import LLMClient, read_call_rows
+from reporting.cost import breakdown as cost_breakdown
+from reporting.schemas import CostBreakdown
 from agents.resolution_cache import ResolutionCache
 from agents.resolver_agent import ResolverAgent
 from hitl.queue import HITLQueue
@@ -173,11 +175,8 @@ class MigrationPipeline:
             counts = {k: raw_counts.get(k, 0) for k in ROW_OUTCOMES}
             out_of_scope = self.decision_logger.rejected_out_of_scope(data.run_id)
             loaded = self.decision_logger.loaded_rows(data.run_id)
-            if deps.llm is not None:
-                totals = deps.llm.totals(data.run_id)
-                tin, tout, calls = totals.input_tokens, totals.output_tokens, totals.calls
-            else:
-                tin = tout = calls = 0
+            cost = self.cost_breakdown(data.run_id, cfg)
+            tin, tout, calls = cost.input_tokens, cost.output_tokens, cost.calls
             open_q = deps.hitl.open_count(data.run_id) if deps.hitl is not None and data.kind == "full" else 0
             keys = {d.pattern_key.split("#row=")[0] for dec in data.decisions.values() for d in dec.fields
                     if d.pattern_key}
@@ -192,7 +191,7 @@ class MigrationPipeline:
             data.run_id, analysed=len(data.rows), counts=counts, out_of_scope=out_of_scope,
             traced_rows=sum(counts.values()), input_tokens=tin, output_tokens=tout,
             price_in=price_in, price_out=price_out, seconds=seconds, loaded=loaded,
-            cache_state="warm" if data.extra.get("cache_entries", 0) else "cold", notes=notes)
+            cache_state="warm" if data.extra.get("cache_entries", 0) else "cold", notes=notes, cost=cost)
         self.metrics.save(RunMetrics(
             run_id=data.run_id, total_seconds=report.seconds, stage_seconds=dict(data.timer.seconds),
             input_tokens=tin, output_tokens=tout, llm_calls=calls, distinct_pattern_keys=len(keys),
@@ -207,6 +206,36 @@ class MigrationPipeline:
             return self.reports.build(run_id).text
         except UnknownRunError:
             return None
+
+    # ---------------------------------------------------------------- AI cost (reporting/cost.py)
+    def _llm_rows(self) -> list[dict]:
+        llm = self.deps.llm
+        if llm is not None and hasattr(llm, "call_rows") and not isinstance(llm, LLMClient):
+            return llm.call_rows()                    # test fake or NoLLM: no shared llm_call table
+        return read_call_rows(self.ops_engine)
+
+    def cost_breakdown(self, run_id: str, cfg=None) -> CostBreakdown:
+        """Tokens attributed to the Run by purpose, real cost and cloud-equivalent cost."""
+        cfg = cfg or self.config()
+        runs = self.runs.list_runs(limit=1_000_000)
+        return cost_breakdown(run_id, runs, self._llm_rows(), cfg.pipeline.llm)
+
+    def report_now(self, run_id: str):
+        """The stored end-of-run report with the AI usage recomputed now (advice and chat made after the Run
+        are included). Same CostBreakdown as ``metrics_now``, so the two always agree."""
+        report = self.reports.build(run_id)
+        cost = self.cost_breakdown(run_id)
+        return ReportGenerator.with_cost(report, cost)
+
+    def metrics_now(self, run_id: str):
+        m = self.metrics.get(run_id)
+        if m is None:
+            return None
+        cost = self.cost_breakdown(run_id)
+        return m.model_copy(update={
+            "input_tokens": cost.input_tokens, "output_tokens": cost.output_tokens, "llm_calls": cost.calls,
+            "tokens_by_purpose": cost.tokens_by_purpose(), "real_cost_eur": cost.real_cost_eur,
+            "cloud_equivalent_cost_eur": cost.cloud_equivalent_cost_eur})
 
     def close(self) -> None:
         self._ckpt_conn.close()

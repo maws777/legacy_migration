@@ -6,9 +6,12 @@ from typing import Any
 import httpx
 
 from agents.jobs import Job
-from agents.schemas import ColumnMapping, PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
+from agents.question_advisor import QuestionAdvice
+from agents.schemas import (
+    ChatResponse, ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
+)
 from hitl.schemas import AnswerResult, DecisionEntry, HumanQuestion
-from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
+from reporting.schemas import CostBreakdown, DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
 
 
 class ApiCallError(Exception):
@@ -72,6 +75,35 @@ class OrchestratorClient:
         params = {k: v for k, v in (("active", active), ("kind", kind)) if v is not None}
         return [Job(**j) for j in self._call("list jobs", "GET", "/ops/jobs", params=params)]
 
+    # ---------------------------------------------------------------- Column_Mapping
+    def schema_reference(self) -> SchemaReference:
+        return SchemaReference(**self._call("load the reference mapping", "GET", "/ops/schema/reference"))
+
+    def schema_discover(self, source: str = "reference") -> SchemaProposal:
+        return SchemaProposal(**self._call("propose the mapping", "POST", "/ops/schema/discover",
+                                           params={"source": source}))
+
+    def latest_proposal(self) -> SchemaProposal | None:
+        try:
+            return SchemaProposal(**self._call("load the mapping proposal", "GET", "/ops/schema/proposals/latest"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def validated_mapping(self) -> ColumnMapping | None:
+        try:
+            return ColumnMapping(**self._call("load the validated mapping", "GET", "/ops/schema/mapping"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def validate_mapping(self, proposal_id: str, operator: str,
+                         mapping: dict[str, str | None] | None = None) -> ColumnMapping:
+        body = {"proposal_id": proposal_id, "operator": operator, "mapping": mapping}
+        return ColumnMapping(**self._call("validate the mapping", "POST", "/ops/schema/validate", json=body))
+
     # ---------------------------------------------------------------- runs (synchronous routes)
     def start_campaign(self, operator: str | None) -> RunInfo:
         return RunInfo(**self._call("start campaign", "POST", "/ops/campaigns", ok=(202,), json={"operator": operator}))
@@ -89,6 +121,12 @@ class OrchestratorClient:
     def metrics(self, run_id: str) -> RunMetrics:
         return RunMetrics(**self._call("load metrics", "GET", f"/ops/runs/{run_id}/metrics"))
 
+    def cost(self, run_id: str) -> CostBreakdown:
+        return CostBreakdown(**self._call("load AI cost", "GET", f"/ops/runs/{run_id}/cost"))
+
+    def target_stats(self) -> dict[str, int]:
+        return self._call("load Target_DB counts", "GET", "/ops/target/stats")["tables"]
+
     def decisions(self, run_id: str, *, limit: int = 200, offset: int = 0, **filters) -> DecisionPage:
         params = {k: v for k, v in filters.items() if v not in (None, "")}
         params.update(limit=limit, offset=offset)
@@ -98,6 +136,20 @@ class OrchestratorClient:
         params = {"pattern_key": pattern_key} if pattern_key else None
         return [ToolCallRecord(**r) for r in self._call("load agent tool calls", "GET",
                                                         f"/ops/runs/{run_id}/tool-calls", params=params)]
+
+    # ---------------------------------------------------------------- Query_Agent (bonus chat)
+    def chat(self, question: str, timeout_s: float = 300.0) -> ChatResponse:
+        """Synchronous: generating SQL with a local model takes several seconds, hence the longer timeout."""
+        return ChatResponse(**self._call("ask the chat", "POST", "/ops/chat", json={"question": question},
+                                         timeout=timeout_s))
+
+    # ---------------------------------------------------------------- Question_Advisor
+    def advise_job(self, question_id: str, operator: str | None) -> Job:
+        return Job(**self._call("ask the agent", "POST", f"/ops/questions/{question_id}/advise", ok=(202,),
+                                json={"operator": operator}))
+
+    def latest_advice(self) -> dict[str, QuestionAdvice]:
+        return {k: QuestionAdvice(**v) for k, v in self._call("load agent advice", "GET", "/ops/advice/latest").items()}
 
     # ---------------------------------------------------------------- questions
     def questions(self, status: str = "open", run_id: str | None = None) -> list[HumanQuestion]:

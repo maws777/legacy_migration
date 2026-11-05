@@ -30,6 +30,15 @@ Cost formula: `input tokens x price_eur_per_input_token + output tokens x price_
 - Even with a key, the 10,000-row dataset would cost zero tokens: it contains no Unknown_Variant (all 12 Pattern_Keys are rule cases sent to humans: R3, R5, R6, R7, R8). The Resolver_Agent is only called for the distinct Unknown_Variant keys, as in the synthetic file (6 keys for 8 rows). With the fake LLM used in `tests/unit/test_agents.py`, that file costs 6 calls (120 tokens each) on a cold Run and 2 calls on the warm Run that follows.
 - Time drivers: the rules stage dominates; field-local results are computed once per distinct value (FieldMemo), batches are 1,000 rows, and loads use one transaction per batch.
 
+## How the AI usage of a Run is counted
+
+Every LLM call is recorded in `llm_call` (run_id, purpose, input and output tokens, time). The report, the metrics (`GET /ops/runs/{run_id}/metrics`), `GET /ops/runs/{run_id}/cost` and the stats page use the same breakdown, recomputed when they are read:
+
+- calls made with the run_id of the Run belong to it: the Resolver_Agent, and the Question_Advisor on the Run's questions (even when the advice is asked after the Run);
+- the other calls (schema discovery, chat, questions of the Legacy B agent) belong to the latest full Run started at or before the call; calls made before the first full Run belong to it.
+
+The end-of-run report keeps the `product.md` line `Estimated AI consumption: N tokens (≈ X €)`, with N the total of all purposes and X the real cost of the configured provider (0 € with Ollama), and adds two lines: the tokens by purpose and the cloud-equivalent cost, which prices the same tokens at the Anthropic prices of Rule_Config (`llm.price_eur_per_input_token`, `llm.price_eur_per_output_token`, model `llm.cloud_reference_model`). The cloud-equivalent cost is an estimate: Claude and qwen2.5 do not count tokens the same way. The Runs above were measured before this rule, with the Resolver_Agent tokens only.
+
 ## Real Runs with Ollama (qwen2.5:7b)
 
 Machine: Intel Core i7-11800H (8 cores, 16 threads), 16 GB of RAM (15.7 GB usable), NVIDIA GeForce GTX 1650 Max-Q with 4 GB of VRAM, Windows. Ollama 0.40.14, model `qwen2.5:7b` (7.6 B parameters, Q4_K_M, 4.7 GB). The model does not fit in 4 GB of VRAM: Ollama put 12 of its 29 layers on the GPU and the rest on the CPU. Default Rule_Config with `legacy_b_lookup: false`, empty Human_Decision_Store and Resolution_Cache (cold Runs). Cost is 0 € for a local model (`price_per_token` returns 0 for ollama); tokens come from Ollama's `prompt_eval_count` and `eval_count`.

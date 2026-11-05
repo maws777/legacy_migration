@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
+from reporting.schemas import PURPOSE_LABELS  # noqa: E402
 from ui.common import client, hero, link, load, setup  # noqa: E402
 from ui.journey import RUN_STATUS  # noqa: E402
 
@@ -73,6 +74,24 @@ elif report.tokens:
                f"{report.tokens:,} tokens (≈ {report.cost_eur:.4f} € théoriques).")
 else:
     st.caption("🤖 L'IA n'a pas été nécessaire : tout a été traité par des règles.")
+
+with st.expander("Coût de l'IA par usage"):
+    cost = load(f"cost_{run_id}", lambda: api.cost(run_id))
+    if cost:
+        cols = st.columns(3)
+        cols[0].metric("Tokens (tous usages)", f"{cost.tokens:,}")
+        cols[1].metric(f"Coût réel ({cost.provider} {cost.model})", f"{cost.real_cost_eur:.4f} €")
+        cols[2].metric("Équivalent cloud", f"{cost.cloud_equivalent_cost_eur:.4f} €",
+                       help=f"Les mêmes tokens aux prix de {cost.cloud_reference} (estimation).")
+        st.dataframe([{"Usage": PURPOSE_LABELS.get(u.purpose, u.purpose), "Appels": u.calls,
+                       "Tokens entrée": u.input_tokens, "Tokens sortie": u.output_tokens, "Total": u.tokens}
+                      for u in cost.by_purpose], width="stretch", hide_index=True)
+
+with st.expander("Contenu de la base cible"):
+    counts = load("target_stats", api.target_stats)
+    if counts:
+        st.dataframe([{"Table": t, "Lignes": n} for t, n in counts.items()], width="stretch", hide_index=True)
+        st.caption("Chaque opération a exactement un résultat : relancer sur le même fichier ne crée aucun doublon.")
 
 with st.expander("Détails techniques"):
     for n in report.notes or []:

@@ -24,7 +24,8 @@ from rules.config import LLMConfig
 from rules.timeutil import naive_utc, utcnow
 
 LLMErrorType = Literal["missing_key", "timeout", "provider_error"]
-Purpose = Literal["schema_discovery", "resolver", "question_rephrase", "query_agent"]
+Purpose = Literal["schema_discovery", "resolver", "question_rephrase", "query_agent", "question_advisor",
+                  "legacy_b_query"]
 KEY_ENV = "ANTHROPIC_API_KEY"
 # Transport used for Ollama when no client is injected; the test suite replaces it so that no test
 # can reach a real Ollama server.
@@ -269,6 +270,10 @@ class LLMClient:
                             .where(llm_call.c.run_id == run_id)).one()
         return RunTokenTotals(int(row[0]), int(row[1]), int(row[2]))
 
+    def call_rows(self) -> list[dict]:
+        """Every recorded call (run_id, purpose, tokens, at), for the cost breakdown of reporting/cost.py."""
+        return read_call_rows(self.engine)
+
     def warm_up(self) -> tuple[bool, float, str]:
         """Load the model and send one short request, so the first Run does not pay the load time.
 
@@ -288,11 +293,22 @@ class LLMClient:
         return True, secs, f"ollama {self.cfg.model} at {self.cfg.base_url}"
 
 
+def read_call_rows(engine: Engine) -> list[dict]:
+    LLM_MD.create_all(engine)
+    with engine.connect() as c:
+        rows = c.execute(select(llm_call.c.run_id, llm_call.c.purpose, llm_call.c.input_tokens,
+                                llm_call.c.output_tokens, llm_call.c.at).order_by(llm_call.c.id)).mappings().all()
+    return [dict(r) for r in rows]
+
+
 class NoLLM:
     """Explicitly disabled LLM (``--no-llm``): the Run is in Degraded_Mode and makes no call."""
 
     def __init__(self, reason: str = "LLM disabled (--no-llm)") -> None:
         self.reason = reason
+
+    def call_rows(self) -> list[dict]:
+        return []
 
     def availability(self) -> tuple[bool, str | None]:
         return False, self.reason

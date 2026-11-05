@@ -16,15 +16,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from agents.jobs import Job, JobConflict, JobManager
+from agents.question_advisor import AdviceToolCall, AdvisorContext, QuestionAdvice, QuestionAdvisor
 from agents.schemas import (
-    ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
-    SchemaProposal, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
+    ChatRequest, ChatResponse, ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
+    SchemaProposal, SchemaReference, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
 )
 from rules.fields import normalize_vin
 from hitl.schemas import AnswerResult, DecisionEntry, HumanAnswer, HumanQuestion, RevokeRequest
 from reporting.decision_log import UnknownRunError, export_media_type
 from reporting.schemas import (
-    DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
+    CostBreakdown, DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
 )
 from rules.errors import ErrorCode, error_payload
 from rules.types import Action, DecidedBy
@@ -182,16 +183,39 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     @app.get("/ops/runs/{run_id}/report", response_model=RunReport)
     def get_report(run_id: str) -> RunReport:
+        """End-of-run report; its AI usage is recomputed now (schema discovery, advice and chat included)."""
         run_or_404(run_id)
-        return svc().pipeline.reports.build(run_id)
+        return svc().pipeline.report_now(run_id)
 
     @app.get("/ops/runs/{run_id}/metrics", response_model=RunMetrics)
     def get_metrics(run_id: str) -> RunMetrics:
         run_or_404(run_id)
-        m = svc().pipeline.metrics.get(run_id)
+        m = svc().pipeline.metrics_now(run_id)
         if m is None:
             raise UnknownRunError(run_id)
         return m
+
+    @app.get("/ops/runs/{run_id}/cost", response_model=CostBreakdown)
+    def get_cost(run_id: str) -> CostBreakdown:
+        """AI usage attributed to the Run by purpose, real cost and cloud-equivalent cost."""
+        run_or_404(run_id)
+        return svc().pipeline.cost_breakdown(run_id)
+
+    @app.get("/ops/target/stats")
+    def target_stats() -> dict:
+        """Row counts of the Target_DB tables (through the Target_API; in-process when none is configured)."""
+        s = svc()
+        if s.target is None:
+            return {"tables": s.pipeline.target_repo.table_counts()}
+        try:
+            r = s.target.get("/target/stats")
+        except httpx.HTTPError as exc:
+            raise ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: {type(exc).__name__}",
+                           {"backend": "target"}) from None
+        if r.status_code != 200:
+            raise ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: HTTP {r.status_code}",
+                           {"backend": "target"})
+        return r.json()
 
     @app.get("/ops/runs/{run_id}/decisions", response_model=DecisionPage)
     def get_decisions(run_id: str, source_row: int | None = None, field: str | None = None,
@@ -257,6 +281,37 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
             raise ApiError(404, "NOT_FOUND", f"no human decision for {body.pattern_key}")
         return svc().pipeline.hitl.list_decisions()
 
+    # ---------------------------------------------------------------- Query_Agent (bonus chat)
+    @app.post("/ops/chat", response_model=ChatResponse)
+    def chat(body: ChatRequest) -> ChatResponse:
+        """Natural-language question -> one validated read-only SELECT on the Target_DB (Requirement 33)."""
+        from agents.query_agent import QueryAgent
+        p = svc().pipeline
+        return QueryAgent(p.ensure_llm(), p.config(), p.var_dir / "target.db").ask(body.question, body.consumer)
+
+    # ---------------------------------------------------------------- Question_Advisor
+    @app.post("/ops/questions/{question_id}/advise", status_code=202, response_model=Job)
+    def advise_question(question_id: str, body: StartRunRequest | None = None) -> Job:
+        """Ask the Question_Advisor in the background (result: QuestionAdvice). It never answers the question."""
+        s = svc()
+        q = s.pipeline.hitl.get(question_id)
+        if q is None:
+            raise ApiError(404, "NOT_FOUND", f"unknown question {question_id}")
+        if q.status != "open":
+            raise ApiError(409, "CONFLICT", f"question {question_id} is {q.status}")
+        operator = (body or StartRunRequest()).operator
+        return submit("advise", f"advise:{question_id}", "llm", lambda: consult_advisor(s, q, operator),
+                      "agent advice", operator)
+
+    @app.get("/ops/questions/{question_id}/advice", response_model=list[QuestionAdvice])
+    def question_advice(question_id: str) -> list[QuestionAdvice]:
+        return [QuestionAdvice(**_advice_model(r)) for r in svc().pipeline.decision_logger.advice(question_id)]
+
+    @app.get("/ops/advice/latest", response_model=dict[str, QuestionAdvice])
+    def latest_advice() -> dict[str, QuestionAdvice]:
+        rows = svc().pipeline.decision_logger.advice(latest_only=True)
+        return {r["question_id"]: QuestionAdvice(**_advice_model(r)) for r in rows}
+
     # ---------------------------------------------------------------- schema discovery (task 7)
     @app.post("/ops/schema/discover", response_model=SchemaProposal)
     def discover_schema(source: Literal["llm", "reference"] = "llm") -> SchemaProposal:
@@ -268,13 +323,30 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     @app.post("/ops/schema/validate", response_model=ColumnMapping)
     def validate_schema(body: ValidateMappingRequest) -> ColumnMapping:
-        from agents.api_agent_legacy import MappingConflictError
+        """Validate a proposal, or the operator's column-by-column correction of it (``mapping``)."""
+        from agents.api_agent_legacy import MappingConflictError, MappingValueError
         try:
-            return svc().pipeline.schema_agent.validate(body.proposal_id, body.operator)
+            return svc().pipeline.schema_agent.validate(body.proposal_id, body.operator, body.mapping)
         except KeyError:
             raise ApiError(404, "NOT_FOUND", f"unknown proposal {body.proposal_id}") from None
+        except MappingValueError as exc:
+            raise ApiError(422, "VALIDATION_ERROR", str(exc)) from None
         except MappingConflictError as exc:
             raise ApiError(409, "CONFLICT", str(exc), [c.model_dump() for c in exc.conflicts]) from None
+
+    @app.get("/ops/schema/proposals/latest", response_model=SchemaProposal)
+    def latest_proposal() -> SchemaProposal:
+        p = svc().pipeline.schema_agent.latest_proposal()
+        if p is None:
+            raise ApiError(404, "NOT_FOUND", "no Column_Mapping proposal waiting for validation")
+        return p
+
+    @app.get("/ops/schema/reference", response_model=SchemaReference)
+    def schema_reference() -> SchemaReference:
+        from agents.api_agent_legacy import TARGET_ATTRIBUTES
+        cfg = svc().pipeline.config()
+        return SchemaReference(targets=list(TARGET_ATTRIBUTES), required_targets=list(cfg.column_mapping.required_targets),
+                               mapping=dict(cfg.column_mapping.mapping))
 
     @app.get("/ops/schema/mapping", response_model=ColumnMapping)
     def get_mapping() -> ColumnMapping:
@@ -428,6 +500,69 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
 class OperatorBody(BaseModel):
     operator: str = Field(min_length=1)
+
+
+# ---------------------------------------------------------------- Question_Advisor wiring
+def advisor_context(s: Services, question) -> AdvisorContext:
+    """Read-only providers of one consultation: group rows, source rows, Legacy B, value validation."""
+    from hitl.validation import validate_value
+    from migration.ingestion import ingest
+    p = s.pipeline
+    cfg = p.config()
+
+    def source_rows():
+        m = p.schema_agent.validated_mapping()
+        mapping = m.mapping if m is not None else dict(cfg.column_mapping.mapping)
+        return ingest(p.deps.source_path, mapping, cfg.column_mapping).rows
+
+    def legacy_b_model(vin: str) -> dict:
+        if s.legacy_b is None:
+            return {"status": "unavailable", "vehicle_model": None}
+        try:
+            t = s.legacy_b.model_reference(vin)
+        except Exception as exc:  # noqa: BLE001 - Legacy B down: the advisor says so
+            return {"status": f"unavailable ({type(exc).__name__})", "vehicle_model": None}
+        if t is None:
+            return {"status": "not_found", "vehicle_model": None}
+        return {"status": "found", "vehicle_model": t.vehicle_model, "updated_on": t.updated_on}
+
+    return AdvisorContext(cfg=cfg, question=question, members=lambda: p.hitl.members(question.question_id),
+                          source_rows=source_rows, legacy_b_model=legacy_b_model,
+                          validate_value=lambda key, value: validate_value(key, value, cfg, p._shared_view()))
+
+
+def consult_advisor(s: Services, question, operator: str | None) -> QuestionAdvice:
+    """Run the Question_Advisor and trace the advice, its tool calls and its tokens in the journal."""
+    import uuid
+    from rules.timeutil import utcnow
+    p = s.pipeline
+    cfg = p.config()
+    advisor = QuestionAdvisor(p.ensure_llm(), cfg.pipeline.advisor_max_turns, cfg.pipeline.advisor_max_tokens)
+    out = advisor.advise(advisor_context(s, question), run_id=question.run_id or "advisor")
+    advice = QuestionAdvice(
+        advice_id=str(uuid.uuid4()), question_id=question.question_id, pattern_key=question.pattern_key,
+        status=out.status, recommendation=out.recommendation, failure=out.failure,
+        tool_calls=[AdviceToolCall(iteration=c.iteration, tool=c.tool, params=c.params(), result_summary=c.summary)
+                    for c in out.tool_calls],
+        llm_calls=out.llm_calls, input_tokens=out.input_tokens, output_tokens=out.output_tokens,
+        seconds=out.seconds, model=out.model, created_at=utcnow())
+    p.decision_logger.write_advice(
+        {"advice_id": advice.advice_id, "question_id": advice.question_id, "pattern_key": advice.pattern_key,
+         "run_id": question.run_id, "status": advice.status,
+         "recommendation": advice.recommendation.model_dump_json() if advice.recommendation else None,
+         "failure": advice.failure, "llm_calls": advice.llm_calls, "input_tokens": advice.input_tokens,
+         "output_tokens": advice.output_tokens, "seconds": advice.seconds, "model": advice.model,
+         "operator": operator, "created_at": advice.created_at},
+        [c.model_dump() for c in advice.tool_calls])
+    return advice
+
+
+def _advice_model(row: dict) -> dict:
+    import json
+    rec = json.loads(row["recommendation"]) if row.get("recommendation") else None
+    return {**{k: row[k] for k in ("advice_id", "question_id", "pattern_key", "status", "failure", "llm_calls",
+                                   "input_tokens", "output_tokens", "seconds", "model", "created_at")},
+            "recommendation": rec, "tool_calls": row.get("tool_calls", [])}
 
 
 app = create_app()

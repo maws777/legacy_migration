@@ -20,6 +20,22 @@ def job(kind="campaign", status="running", **kw):
     return Job(**base)
 
 
+REFERENCE = {"originTool": "DiagToolsVersions.DiagToolName", "VIN": "Vehicle.VIN"}
+TARGETS = ["Vehicle.VIN", "DiagToolsVersions.DiagToolName", "Label"]
+
+
+def validated(by="ann"):
+    return ColumnMapping(mapping=REFERENCE, validated_by=by, validated_at=NOW)
+
+
+def proposal(mapping, conflicts=(), fallback=False):
+    diffs = [{"column": c, "proposed": t, "reference": REFERENCE.get(c)} for c, t in mapping.items()
+             if t != REFERENCE.get(c)]
+    return SchemaProposal(proposal_id="p1", column_mapping=mapping, formats=[], format_criterion="x",
+                          conflicts=list(conflicts), fallback=fallback, created_at=NOW,
+                          differences_from_reference=diffs)
+
+
 class FakeApi:
     def __init__(self, active=(), mapping="validated", runs=(), open_questions=0, recon=None, phase=1):
         self.active = list(active)
@@ -43,6 +59,19 @@ class FakeApi:
 
     def metrics(self, run_id):
         return None
+
+    def cost(self, run_id):
+        return None
+
+    def target_stats(self):
+        return {}
+
+    def latest_advice(self):
+        return getattr(self, "_advice", {})
+
+    def advise_job(self, question_id, operator):
+        self.advised = getattr(self, "advised", []) + [question_id]
+        return job("advise", "queued", key=f"advise:{question_id}", lane="llm")
 
     def transitions(self):
         return []
@@ -209,6 +238,19 @@ def test_batch_validation_answers_the_ticked_suggestions_only():
     button(at, "Valider les suggestions cochées").click().run()
     assert api.answered == [("q1", "apply_value", "ID0004"), ("q2", "reject_group", None)]
 
+
+def test_batch_uses_the_advisor_recommendation_for_questions_without_resolver_suggestion():
+    api = FakeApi()
+    api.questions = lambda status="open", run_id=None: [_question(5, suggestion=False)]
+    rec = SimpleNamespace(option="apply_value", value="ID0007", confidence=0.85, justification="seen in Legacy B",
+                          evidence=["row 3"], unknowns=[])
+    api._advice = {"q5": SimpleNamespace(status="recommended", recommendation=rec, failure=None)}
+    api.answered = []
+    api.answer = lambda qid, option, op, value=None: api.answered.append((qid, option, value)) or SimpleNamespace(created_questions=[])
+    at = app(api, page="ui/pages/2_Questions.py", operator="ann").run()
+    assert not at.exception
+    button(at, "Valider les suggestions cochées").click().run()
+    assert api.answered == [("q5", "apply_value", "ID0007")]
 
 @pytest.mark.parametrize("pending", [0, 5])
 def test_results_page_shows_a_verdict_and_the_table(pending):

@@ -9,6 +9,9 @@ discovery_sample_size: 20
 resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
 # Resolver_Agent: at most this many LLM turns (tool calls + final answer) per Pattern_Key (max 3).
 resolver_max_iterations: 3
+# Question_Advisor: at most this many LLM turns per consultation (max 4), output tokens per turn.
+advisor_max_turns: 4
+advisor_max_tokens: 400
 llm:
   # provider: ollama (local, default) or anthropic (needs ANTHROPIC_API_KEY).
   # To switch back to Anthropic: provider: anthropic and model: claude-haiku-4-5.
@@ -18,10 +21,12 @@ llm:
   keep_alive: 2h                        # Ollama only: keep the model loaded between calls
   timeout_s: 180                        # loading qwen2.5:7b partly on CPU took 80 s on the first call
   max_tokens: 150
-  # Prices apply to anthropic only (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million
-  # tokens, converted to EUR). With ollama the cost is 0 EUR; tokens are still recorded.
+  # Anthropic API prices (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million tokens, in EUR).
+  # Real cost with provider anthropic; with ollama the real cost is 0 EUR and these prices give the
+  # "cloud-equivalent cost" of the same tokens in the report and the stats page.
   price_eur_per_input_token: 0.00000092
   price_eur_per_output_token: 0.0000046
+  cloud_reference_model: claude-haiku-4-5
 control_sample:
   size: 50
   seed: 42
@@ -36,8 +41,9 @@ services:
 client_app:
   interval_s: 1.0
   timeout_s: 5.0
+# Query_Agent (bonus chat, Requirement 33): natural language -> one read-only SELECT on the Target_DB.
 query_agent:
-  enabled: false
+  enabled: true
   row_limit: 200
 paths:
   source_csv: data/legacy/hackathon-2026-digital-continuity-dataset.csv

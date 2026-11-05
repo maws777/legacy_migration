@@ -83,9 +83,15 @@ class LocalLegacyASource:
 
 
 class MappingConflictError(Exception):
-    def __init__(self, conflicts: list[MappingConflict]) -> None:
-        super().__init__(f"{len(conflicts)} Column_Mapping conflict(s)")
+    def __init__(self, conflicts: list[MappingConflict], proposal_id: str | None = None) -> None:
+        text = "; ".join(c.message or c.target_attribute for c in conflicts)
+        super().__init__(f"{len(conflicts)} Column_Mapping conflict(s): {text}")
         self.conflicts = conflicts
+        self.proposal_id = proposal_id
+
+
+class MappingValueError(ValueError):
+    """An operator correction names an unknown source column or target attribute (HTTP 422)."""
 
 
 MAPPING_MD = MetaData()
@@ -190,12 +196,7 @@ class SchemaDiscoveryAgent:
             proposal_id=str(uuid.uuid4()), column_mapping=mapping, formats=formats, format_criterion=criterion,
             conflicts=conflicts, fallback=fallback, created_at=utcnow(),
             differences_from_reference=mapping_differences(mapping, dict(cfg.column_mapping.mapping)))
-        with self.engine.begin() as c:
-            c.execute(insert(column_mapping).values(
-                id=proposal.proposal_id, status="proposed", mapping=json.dumps(mapping),
-                formats=json.dumps([f.model_dump() for f in formats]), format_criterion=criterion,
-                conflicts=json.dumps([x.model_dump() for x in proposal.conflicts]), fallback=fallback,
-                created_at=naive_utc(proposal.created_at)))
+        self._store(proposal)
         return proposal
 
     @staticmethod
@@ -230,14 +231,60 @@ class SchemaDiscoveryAgent:
             created_at=as_utc(r["created_at"]),
             differences_from_reference=mapping_differences(mapping, dict(self._config().column_mapping.mapping)))
 
-    def validate(self, proposal_id: str, operator: str) -> ColumnMapping:
-        """Human validation; refused while conflicts remain. The answer repeats the differences from the
-        reference so the operator sees exactly what is being accepted."""
+    def _store(self, proposal: SchemaProposal) -> None:
+        with self.engine.begin() as c:
+            c.execute(insert(column_mapping).values(
+                id=proposal.proposal_id, status="proposed", mapping=json.dumps(proposal.column_mapping),
+                formats=json.dumps([f.model_dump() for f in proposal.formats]),
+                format_criterion=proposal.format_criterion,
+                conflicts=json.dumps([x.model_dump() for x in proposal.conflicts]), fallback=proposal.fallback,
+                created_at=naive_utc(proposal.created_at)))
+
+    def corrected(self, proposal_id: str, mapping: dict[str, str | None]) -> SchemaProposal:
+        """Operator correction of a proposal: same columns, new targets; conflicts recomputed and stored."""
         p = self.proposal(proposal_id)
         if p is None:
             raise KeyError(proposal_id)
+        unknown_cols = sorted(set(mapping) - set(p.column_mapping))
+        missing_cols = sorted(set(p.column_mapping) - set(mapping))
+        if unknown_cols or missing_cols:
+            raise MappingValueError(f"the correction must keep the source columns of the proposal: unknown "
+                                    f"{unknown_cols}, missing {missing_cols}")
+        bad = sorted({str(t) for t in mapping.values() if t is not None and t not in TARGET_ATTRIBUTES})
+        if bad:
+            raise MappingValueError(f"unknown target attribute(s): {bad}")
+        cfg = self._config()
+        ordered = {c: mapping[c] for c in p.column_mapping}
+        fixed = SchemaProposal(
+            proposal_id=str(uuid.uuid4()), column_mapping=ordered, formats=p.formats,
+            format_criterion=p.format_criterion, conflicts=find_conflicts(ordered, cfg.column_mapping.required_targets),
+            fallback=p.fallback, created_at=utcnow(),
+            differences_from_reference=mapping_differences(ordered, dict(cfg.column_mapping.mapping)))
+        self._store(fixed)
+        return fixed
+
+    def latest_proposal(self) -> SchemaProposal | None:
+        """The latest proposal still waiting for validation (newer than the validated mapping, if any)."""
+        q = select(column_mapping.c.id).where(column_mapping.c.status == "proposed")
+        validated = self.validated_mapping()
+        if validated is not None:
+            q = q.where(column_mapping.c.created_at > naive_utc(validated.validated_at))
+        with self.engine.connect() as c:
+            pid = c.execute(q.order_by(column_mapping.c.created_at.desc()).limit(1)).scalar()
+        return self.proposal(pid) if pid else None
+
+    def validate(self, proposal_id: str, operator: str, mapping: dict[str, str | None] | None = None) -> ColumnMapping:
+        """Human validation; refused while conflicts remain. With ``mapping`` (operator correction that
+        differs from the proposal), a corrected proposal is stored and validated instead. The answer repeats
+        the differences from the reference so the operator sees exactly what is being accepted."""
+        p = self.proposal(proposal_id)
+        if p is None:
+            raise KeyError(proposal_id)
+        if mapping is not None and mapping != p.column_mapping:
+            p = self.corrected(proposal_id, mapping)
+            proposal_id = p.proposal_id
         if p.conflicts:
-            raise MappingConflictError(p.conflicts)
+            raise MappingConflictError(p.conflicts, proposal_id)
         now = utcnow()
         with self.engine.begin() as c:
             c.execute(delete(column_mapping).where(column_mapping.c.status == "validated"))
@@ -251,8 +298,10 @@ class SchemaDiscoveryAgent:
             r = c.execute(select(column_mapping).where(column_mapping.c.status == "validated")).mappings().first()
         if r is None:
             return None
-        return ColumnMapping(mapping=json.loads(r["mapping"]), validated_by=r["validated_by"],
-                             validated_at=as_utc(r["validated_at"]))
+        mapping = json.loads(r["mapping"])
+        return ColumnMapping(mapping=mapping, validated_by=r["validated_by"], validated_at=as_utc(r["validated_at"]),
+                             differences_from_reference=mapping_differences(
+                                 mapping, dict(self._config().column_mapping.mapping)))
 
 
 def read_header(path) -> tuple[str, ...]:

@@ -75,9 +75,11 @@ class LLMConfig(_Frozen):
     keep_alive: str = "2h"                              # Ollama only: keep the model loaded between calls
     timeout_s: float = Field(180, gt=0)
     max_tokens: int = Field(150, ge=1)
-    # Prices apply to anthropic only; a local Ollama model costs 0 EUR (tokens are still recorded).
+    # Anthropic API prices: the real cost with provider anthropic, and the cloud-equivalent cost of any
+    # provider (a local Ollama model costs 0 EUR; its tokens are still recorded and priced as if on the cloud).
     price_eur_per_input_token: float = Field(ge=0)
     price_eur_per_output_token: float = Field(ge=0)
+    cloud_reference_model: str = "claude-haiku-4-5"     # model the two prices above belong to
 
     def price_per_token(self) -> tuple[float, float]:
         if self.provider == "ollama":
@@ -132,6 +134,8 @@ class PipelineConfig(_Frozen):
     discovery_sample_size: int = Field(20, ge=1)
     resolver_auto_apply_fields: tuple[str, ...] = ("originTool", "ecuName", "Vehmodel", "ecuCode")
     resolver_max_iterations: int = Field(3, ge=1, le=3)
+    advisor_max_turns: int = Field(4, ge=1, le=4)            # Question_Advisor: LLM turns per consultation
+    advisor_max_tokens: int = Field(400, ge=50)              # output tokens per Question_Advisor turn
     llm: LLMConfig
     control_sample: ControlSampleConfig = ControlSampleConfig()
     legacy_b: LegacyBSimConfig = LegacyBSimConfig()
