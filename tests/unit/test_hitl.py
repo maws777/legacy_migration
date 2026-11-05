@@ -121,3 +121,21 @@ def test_validate_value_rules(cfg):
     assert validate_value("diagnosticFieId|SHARED_OP_ID", "U1", cfg, view)
     assert validate_value("diagnosticFieId|SHARED_OP_ID", "x" * 129, cfg, view)
     assert validate_value("_row|RECON_GAP|12", "ACCEPT_TARGET", cfg) is None
+
+@pytest.mark.parametrize("decision, value, ok", [("map", "ID0004", True), ("map", "ID0009", False),
+                                                  ("reject", None, True)])
+def test_llm_suggestion_is_checked_by_the_rules(run, decision, value, ok):
+    import json
+    from sqlalchemy import update
+    from hitl.queue import human_question
+    p, _ = run
+    q = q_by_key(p, "ecuCode|FORMAT2_NO_DID")
+    s = {"decision": decision, "value": value, "confidence": 0.8, "justification": "j"}
+    with p.hitl.engine.begin() as c:
+        c.execute(update(human_question).where(human_question.c.question_id == q.question_id)
+                  .values(llm_suggestion=json.dumps(s)))
+    checked = p.hitl.get(q.question_id)
+    assert (checked.suggestion_issue is None) == ok
+    listed = next(x for x in p.hitl.list("open") if x.question_id == q.question_id)
+    assert listed.suggestion_issue == checked.suggestion_issue
+    assert q_by_key(p, "ecuName|UNREADABLE").suggestion_issue is None

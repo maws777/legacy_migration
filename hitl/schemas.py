@@ -56,6 +56,7 @@ class HumanQuestion(BaseModel):
     why: str
     llm_suggestion: LLMSuggestionOut | None
     llm_status: QuestionLLMStatus
+    suggestion_issue: str | None = None   # why the LLM proposal cannot be applied (checked by the rules)
     allowed_values: list[str] | None
     options: list[Option]
     status: Literal["open", "closed", "superseded"]

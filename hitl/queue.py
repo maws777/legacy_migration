@@ -167,7 +167,7 @@ class HITLQueue:
     def get(self, question_id: str) -> HumanQuestion | None:
         with self.engine.connect() as c:
             r = c.execute(select(human_question).where(human_question.c.question_id == question_id)).mappings().first()
-        return self._model(r) if r else None
+        return self._checked(self._model(r)) if r else None
 
     def list(self, status: str | None = None, run_id: str | None = None) -> list[HumanQuestion]:
         q = select(human_question).order_by(human_question.c.created_at, human_question.c.pattern_key)
@@ -176,7 +176,7 @@ class HITLQueue:
         if run_id:
             q = q.where(human_question.c.run_id == run_id)
         with self.engine.connect() as c:
-            return [self._model(r) for r in c.execute(q).mappings().all()]
+            return [self._checked(self._model(r)) for r in c.execute(q).mappings().all()]
 
     def open_questions(self, run_id: str | None = None) -> list[HumanQuestion]:
         return self.list("open", run_id)
@@ -201,6 +201,19 @@ class HITLQueue:
                 human_question.c.status == "open", human_question.c.run_id.is_not(None),
                 human_question.c.run_id != run_id).values(status="superseded", closed_at=naive_utc(utcnow())))
         return res.rowcount or 0
+
+    def _checked(self, q: HumanQuestion) -> HumanQuestion:
+        """Run the LLM proposal through the same rules as a human answer; flag it when it would be refused."""
+        s = q.llm_suggestion
+        if s is None:
+            return q
+        if s.decision == "reject":
+            issue = None if "reject_group" in q.options else "rejeter n'est pas permis pour ce groupe"
+        elif "apply_value" not in q.options:
+            issue = "appliquer une valeur n'est pas permis pour ce groupe"
+        else:
+            issue = validate_value(q.pattern_key, s.value, self._config(), self._shared_view())
+        return q.model_copy(update={"suggestion_issue": issue}) if issue else q
 
     @staticmethod
     def _model(r) -> HumanQuestion:

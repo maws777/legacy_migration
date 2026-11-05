@@ -187,6 +187,29 @@ def test_decisions_page_lists_and_cancels_a_decision():
     assert any("Aucune décision" in i.value for i in at.info)
 
 
+def _question(i, decision="map", value="ID0004", confidence=0.8, issue=None, suggestion=True):
+    s = SimpleNamespace(decision=decision, value=value, confidence=confidence, justification="j") if suggestion else None
+    return SimpleNamespace(question_id=f"q{i}", field="ecuCode", row_count=10 - i, scope="group", source_row_id=None,
+                           missing="m", why="w", example_rows=[], llm_suggestion=s, suggestion_issue=issue,
+                           llm_status="degraded", options=["apply_value", "reject_group", "case_by_case"],
+                           allowed_values=["ID0004"])
+
+
+def test_batch_validation_answers_the_ticked_suggestions_only():
+    api = FakeApi()
+    api.questions = lambda status="open", run_id=None: [
+        _question(1, confidence=0.9), _question(2, decision="reject", value=None, confidence=0.8),
+        _question(3, confidence=0.4), _question(4, value="ID0009", issue="R3: not allowed"),
+        _question(5, suggestion=False)]
+    api.answered = []
+    api.answer = lambda qid, option, op, value=None: api.answered.append((qid, option, value)) or SimpleNamespace(created_questions=[])
+    at = app(api, page="ui/pages/2_Questions.py", operator="ann").run()
+    assert not at.exception
+    assert at.tabs[1].label.endswith("(3)")
+    button(at, "Valider les suggestions cochées").click().run()
+    assert api.answered == [("q1", "apply_value", "ID0004"), ("q2", "reject_group", None)]
+
+
 @pytest.mark.parametrize("pending", [0, 5])
 def test_results_page_shows_a_verdict_and_the_table(pending):
     api = FakeApi(runs=[_run("done")])
