@@ -51,7 +51,8 @@ $services = @(
     @{ Name = "Orchestrator :8000"; Port = 8000; Health = "/ops/phase"
        Env = @{ MIGRATION_SOURCE = $Source; MIGRATION_VAR_DIR = $VarDir; MIGRATION_NO_LLM = $(if ($NoLLM) { "1" } else { "" }) }
        Args = "-m uvicorn agents.orchestrator:app --port 8000" },
-    @{ Name = "UI :8501"; Port = 8501; Health = $null; Env = @{ ORCHESTRATOR_URL = "http://127.0.0.1:8000" }
+    @{ Name = "UI :8501"; Port = 8501; Health = $null
+       Env = @{ ORCHESTRATOR_URL = "http://127.0.0.1:8000"; MIGRATION_VAR_DIR = $VarDir }   # Legacy B agent button
        Args = "-m streamlit run ui/app.py --server.port 8501 --server.headless true" }
 )
 if (-not $NoClient) {

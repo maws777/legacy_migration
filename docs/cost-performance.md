@@ -80,6 +80,26 @@ Schema discovery on the 10,000-row file (header and the first 20 rows): one call
 
 Model load times: about 80 s for the first call after installation (44 s loading the model, 26 s evaluating the prompt), 16.9 s for a warm-up after the model had been unloaded, 2.9 s when it was still in memory. `llm.keep_alive: 2h` keeps the model loaded between Runs, and `llm.timeout_s` is 180 s so a slow first load does not fail. The first load attempt after installation failed with HTTP 500 (out of memory, see `docs/lessons-learnt.md`).
 
+## Agents on demand and chat (real check, Run `0425fbe8`)
+
+Same machine and model; Legacy B lookup on; services started by `scripts/start_all.ps1`; every action launched through the routes of the UI buttons. Times are the job or request durations seen by the UI; "LLM" is the model time recorded in `llm_call`.
+
+| Action | Time | LLM calls | Tokens (in + out) | Result |
+|---|---|---|---|---|
+| AI mapping proposal (background job) | 36.5 s (LLM 34.1 s) | 1 | 2,332 + 217 = 2,549 | refused: 4 conflicts, 5 differences; corrected column by column, then validated |
+| Campaign, Run 1 (background job) | 13.1 s | 0 | 0 | 6,927 / 637 / 1,916 / 520, 12 questions |
+| Advice on `Vehmodel\|LEGACY_B_CONFLICT` | 78.7 s | 4 | 5,160 + 242 = 5,402 | case by case, 0.70 |
+| Advice on `diagnosticFieId\|SHARED_OP_ID` | 77.1 s | 4 | 5,334 + 251 = 5,585 | generate deterministic ids, 0.95 |
+| Chat: vehicles per model | 6.0 s | 1 | 700 + 33 = 733 | correct (6,010 vehicles) |
+| Chat: ECU with the most operations | 3.9 s | 1 | 699 + 32 = 731 | correct (BMS, 655) |
+| Chat: 5 most recent operations | 10.8 s | 1 | 705 + 53 = 758 | correct |
+| Legacy B agent (UI button, own process) | 86 s | 4 | 635 for the questions, 913 + 828 + 858 for their SQL | 3 answers, 1 comparison (1 same model) |
+| Resume, Run 2 (background job) | 9.2 s | 0 | 0 | 6,927 / 683 / 2,390 / 0 |
+
+Per advisor call: 5 to 17 s for a tool request (18 to 41 output tokens), 35 to 38 s for the final answer (162 and 165 output tokens). The prompt grows from about 530 to 1,800 input tokens over the 4 turns, because it carries the earlier tool results. A chat question costs about 700 input tokens: the prompt carries the description of 4 tables and the closed values.
+
+The report of Run 1 at the end of the check: 45 calls, 37,134 + 3,938 = 41,072 tokens, real cost 0 €, cloud-equivalent cost 0.0523 €. By purpose: schema discovery 2,549, Question_Advisor 10,987, chat 24,093 (of which 14,983 from the Legacy B consumer), Legacy B questions 3,443. These totals include the repeated chat and Legacy B runs made while fixing their prompts. One pass of the demo uses about 19,000 tokens, about 0.024 € at cloud prices.
+
 ## 100,000-row Run
 
 Not performed yet (optional task 14.1, Requirement 34.1).

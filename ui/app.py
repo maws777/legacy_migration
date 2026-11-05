@@ -55,5 +55,5 @@ if paused:
     if st.button("Resume after human answers (next Run)", disabled=pipeline_job is not None):
         launch("resume", lambda: api.resume_job(cid, op))
 st.dataframe([r.model_dump(mode="json") for r in runs], width="stretch")
-st.info("Pages: Stats, Questions, Decision log, Phases (left sidebar).")
+st.info("Pages: Stats, Questions, Decision log, Phases, Chat (left sidebar).")
 auto_refresh(jobs)
