@@ -232,7 +232,8 @@ def test_advise_button_runs_a_job_and_shows_the_advice():
         recommendation={"option": "case_by_case", "value": None, "confidence": 0.7, "justification": "two sources",
                         "evidence": ["Legacy B holds MASTER"], "unknowns": ["which system is right"]},
         tool_calls=[{"iteration": 1, "tool": "legacy_b_model", "params": "{}", "result_summary": "found"}],
-        llm_calls=2, input_tokens=900, output_tokens=120, seconds=14.2, created_at=NOW)}
+        llm_calls=2, input_tokens=900, output_tokens=120, seconds=14.2,
+        created_at=NOW.isoformat())}                              # as built from the JSON of the real API
     api.job = lambda job_id: job("advise", status="succeeded", key="advise:q1", label="agent advice", result={})
     at.run()
     assert any("Option conseillée : **Case by case**" in s.value for s in at.success)

@@ -35,7 +35,7 @@ def test_fallback_questions(cfg):
                      (FakeLLM(lambda b: LLMFailure("timeout", "ReadTimeout")), "LLM failure timeout")):
         qs, origin, _ = LegacyBAsker(llm, None, STORE, cfg).questions()
         assert origin.startswith("fallback") and why in origin and len(qs) == 3
-    assert VINS[0] in fallback_questions({"sample_vins": [VINS[0]]})[1]
+    assert f"{VINS[0]}, {VINS[1]}" in fallback_questions({"sample_vins": VINS[:2]})[0]
 
 
 def test_compare_with_own_records(cfg):

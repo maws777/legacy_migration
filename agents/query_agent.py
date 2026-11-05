@@ -26,13 +26,19 @@ EXEC_TIMEOUT_S = 10.0
 FORBIDDEN_NODES = (exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create, exp.Alter, exp.Command, exp.Pragma,
                    exp.Merge, exp.TruncateTable)
 SET_OPERATIONS = (exp.Union, exp.Intersect, exp.Except)
+# Tables described to the model. vehicle_ecu and diagnozed_ecu stay allow-listed but are left out of the prompt:
+# their content is already in diagnostic_operation, and a 7B model that sees them joins them needlessly
+# (a join with vehicle_ecu counted 7,564 vehicle/ECU pairs instead of 6,010 vehicles).
+PROMPT_TABLES = ("vehicle", "diagnostic_operation", "diag_value_result", "diag_tools_versions")
 _FENCE = re.compile(r"```(?:sql)?\s*(.+?)```", re.DOTALL | re.IGNORECASE)
 
 SYSTEM = (
     "You translate one question about a vehicle-diagnostics database into ONE SQLite SELECT statement.\n"
     'Reply with JSON only: {"sql": "<one SELECT statement>"}.\n'
     "Use only the tables and columns listed in \"schema\". Never write INSERT, UPDATE, DELETE, DROP, PRAGMA or "
-    "ATTACH. Prefer explicit column names, add ORDER BY when the order matters, and LIMIT for top-N questions."
+    "ATTACH. Join only the tables the question needs, and when you join, prefix EVERY column with its table "
+    "name or alias (several tables share vin and ecu_name). Add ORDER BY when the order matters, and LIMIT for "
+    "top-N questions."
 )
 
 
@@ -43,7 +49,7 @@ def schema_description(cfg: RuleConfig) -> dict:
     allowed = set(cfg.pipeline.query_agent.allowed_tables)
     tables = {}
     for name, t in md.tables.items():
-        if name not in allowed:
+        if name not in allowed or name not in PROMPT_TABLES:
             continue
         cols = [f"{c.name} {c.type}" for c in t.columns]
         fks = [f"({', '.join(fk.column_keys)}) -> {fk.referred_table.name}" for fk in t.foreign_key_constraints]
@@ -52,8 +58,11 @@ def schema_description(cfg: RuleConfig) -> dict:
             "values": {"vehicle.vehicle_model": list(cfg.vehicle_models), "diagnozed_ecu.ecu_name": list(cfg.ecus),
                        "diag_tools_versions.diag_tool_name": list(cfg.tools),
                        "diag_value_result.value_description": dict(cfg.dictionaries.value_descriptions)},
-            "notes": "diagnostic_operation.creation_date is a datetime 'YYYY-MM-DD HH:MM:SS'; one diag_value_result "
-                     "per diagnostic_operation; join vehicle_ecu, vehicle, diagnozed_ecu on vin and ecu_name."}
+            "notes": "vehicle has one row per VIN: count vehicles with COUNT(*) FROM vehicle, without any join. "
+                     "diagnostic_operation has one row per operation and already holds vin, ecu_name and the tool: "
+                     "counts per ECU, per tool or per VIN need no join. Join vehicle on vin only for the model, "
+                     "diag_value_result on diagnostic_op_id only for the value (one per operation). creation_date "
+                     "is text 'YYYY-MM-DD HH:MM:SS.ffffff'."}
 
 
 def validate_sql(sql: str, allowed_tables) -> tuple[str | None, str | None, list[str]]:
