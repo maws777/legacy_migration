@@ -8,10 +8,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
-from ui.common import client, load  # noqa: E402
+from reporting.schemas import PURPOSE_LABELS  # noqa: E402
+from ui.common import client, load, operator  # noqa: E402
 
 st.title("Run statistics")
 api = client()
+operator()                                   # keeps ?operator= in the URL on this page too
 runs = load("runs", api.runs) or []
 if not runs:
     st.warning("No Run yet.")
@@ -41,6 +43,28 @@ if report:
     st.caption(f"Rejected: {report.rejected_out_of_scope:,} out of scope, {report.rejected_error:,} in error; "
                f"{report.pending_human:,} pending human decision; {report.cache_state} Run.")
     st.code(report.text, language="text")
+
+cost = load(f"cost_{run_id}", lambda: api.cost(run_id))
+if cost:
+    st.subheader("Coût IA")
+    cols = st.columns(3)
+    cols[0].metric("Tokens (tous usages)", f"{cost.tokens:,}")
+    cols[1].metric(f"Coût réel ({cost.provider} {cost.model})", f"{cost.real_cost_eur:.4f} €")
+    cols[2].metric("Coût équivalent cloud", f"{cost.cloud_equivalent_cost_eur:.4f} €")
+    st.dataframe([{"Usage": PURPOSE_LABELS.get(u.purpose, u.purpose), "Appels": u.calls,
+                   "Tokens entrée": u.input_tokens, "Tokens sortie": u.output_tokens, "Total": u.tokens}
+                  for u in cost.by_purpose], width="stretch", hide_index=True)
+    st.caption(f"Coût équivalent cloud : les mêmes tokens aux prix de {cost.cloud_reference} configurés dans "
+               "Rule_Config (estimation : les tokenizers diffèrent). Rattachement : appels du Run, plus la "
+               "découverte du schéma, le chat et les questions Legacy B faits depuis son démarrage (avant le Run "
+               "suivant), et l'avis de l'agent sur ses questions.")
+
+counts = load("target_stats", api.target_stats)
+if counts:
+    st.subheader("Target_DB")
+    st.dataframe([{"Table": t, "Lignes": n} for t, n in counts.items()], width="stretch", hide_index=True)
+    st.caption("Chaque diagnostic_operation a exactement un diag_value_result : une nouvelle campagne sur le même "
+               "fichier ne change pas ces nombres (aucun doublon).")
 if metrics:
     st.subheader("Metrics")
     st.json(metrics.model_dump(mode="json"))

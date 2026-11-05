@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Callable
 
 from agents.llm_client import LLMFailure, LLMSuccess, RunTokenTotals
+from rules.timeutil import utcnow
 
 
 class FakeLLM:
@@ -15,6 +16,7 @@ class FakeLLM:
         self.available = available
         self.tokens = tokens
         self.calls: list[dict] = []
+        self.rows: list[dict] = []
         self._totals: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
 
     def is_available(self) -> bool:
@@ -30,15 +32,23 @@ class FakeLLM:
         out = a(body) if callable(a) else (a or {}).get(body.get("value", ""), "no answer")
         t = self._totals[run_id]
         t[2] += 1
-        if isinstance(out, LLMFailure):
+        failed = isinstance(out, LLMFailure)
+        tin, tout = (0, 0) if failed else self.tokens
+        self.rows.append({"run_id": run_id, "purpose": purpose, "input_tokens": tin, "output_tokens": tout,
+                          "at": utcnow()})
+        if failed:
             return out
-        t[0] += self.tokens[0]
-        t[1] += self.tokens[1]
-        return LLMSuccess(out, self.tokens[0], self.tokens[1], "fake-model", 1)
+        t[0] += tin
+        t[1] += tout
+        return LLMSuccess(out, tin, tout, "fake-model", 1)
 
     def totals(self, run_id: str) -> RunTokenTotals:
         t = self._totals.get(run_id, [0, 0, 0])
         return RunTokenTotals(t[0], t[1], t[2])
+
+    def call_rows(self) -> list[dict]:
+        """Same shape as LLMClient.call_rows (llm_call rows), for the cost breakdown."""
+        return list(self.rows)
 
 
 def answer(decision: str, value: str | None, confidence: float, why: str = "matches by spelling") -> str:

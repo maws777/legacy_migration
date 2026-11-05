@@ -91,8 +91,12 @@ def test_one_call_per_pattern_key_and_threshold_gate(edge):
     assert qs["Creation_date|UNKNOWN_VARIANT|2024-03-15 10:30"].llm_status == "proposed_human_only"
     assert qs["ecuCode|UNKNOWN_VARIANT|ID 0004"].llm_status == "failed"
     m = p.metrics.get(info.run_id)
-    assert (m.llm_calls, m.input_tokens, m.output_tokens, m.cache_hit_rate) == (6, 600, 120, 0.0)
-    assert p.reports.build(info.run_id).tokens == 720 and p.cache.count() == 3
+    # 6 Resolver_Agent calls of the Run + the schema discovery made before it (attributed to the first Run).
+    assert (m.llm_calls, m.input_tokens, m.output_tokens, m.cache_hit_rate) == (7, 700, 140, 0.0)
+    cost = p.cost_breakdown(info.run_id)
+    assert {u.purpose: (u.calls, u.tokens) for u in cost.by_purpose if u.calls} == {
+        "resolver": (6, 720), "schema_discovery": (1, 120)}
+    assert p.reports.build(info.run_id).tokens == 840 and p.cache.count() == 3
     p.close()
 
 

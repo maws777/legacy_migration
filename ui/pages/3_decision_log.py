@@ -8,10 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
-from ui.common import client, load  # noqa: E402
+from ui.common import client, load, operator  # noqa: E402
 
 st.title("Decision log")
 api = client()
+operator()                                   # keeps ?operator= in the URL on this page too
 runs = load("runs", api.runs) or []
 if not runs:
     st.warning("No Run yet.")

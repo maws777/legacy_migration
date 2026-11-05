@@ -56,7 +56,7 @@ class MetricsStore:
         METRICS_MD.create_all(engine)
 
     def save(self, m: RunMetrics) -> None:
-        row = m.model_dump()
+        row = m.model_dump(include=set(run_metrics.c.keys()))
         row["stage_seconds"] = json.dumps(m.stage_seconds)
         row["counts"] = json.dumps(m.counts)
         with self.engine.begin() as c:
@@ -68,7 +68,7 @@ class MetricsStore:
             r = c.execute(select(run_metrics).where(run_metrics.c.run_id == run_id)).mappings().first()
         if r is None:
             return None
-        d = dict(r)
+        d = {k: v for k, v in dict(r).items() if k in run_metrics.c}
         d["stage_seconds"] = json.loads(d["stage_seconds"])
         d["counts"] = json.loads(d["counts"])
         return RunMetrics(**d)

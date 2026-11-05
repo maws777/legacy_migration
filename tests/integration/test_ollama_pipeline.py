@@ -104,8 +104,14 @@ def test_agent_with_simulated_ollama(tmp_path):
         assert qs["ecuCode|UNKNOWN_VARIANT|ID 0004"].llm_status == "failed"
         report = p.reports.build(info.run_id)
         m = p.metrics.get(info.run_id)
-        assert (m.llm_calls, m.input_tokens, m.output_tokens, m.degraded_mode) == (12, 600, 120, False)
-        assert report.tokens == 720 and report.cost_eur == 0.0 and "720 tokens (≈ 0.0000 €)" in report.text
+        # 12 Resolver_Agent calls (720 tokens) + the schema discovery made before the Run (60 tokens).
+        assert (m.llm_calls, m.input_tokens, m.output_tokens, m.degraded_mode) == (13, 650, 130, False)
+        assert report.tokens == 780 and report.cost_eur == 0.0 and "780 tokens (≈ 0.0000 €)" in report.text
+        assert "AI usage by purpose (tokens): Resolver_Agent 720, schema discovery 60" in report.text
+        cloud = 650 * 0.00000092 + 130 * 0.0000046
+        assert report.cloud_equivalent_cost_eur == pytest.approx(cloud)
+        assert (f"Cloud-equivalent cost (anthropic claude-haiku-4-5 prices): {cloud:.4f} € (real cost 0.0000 € "
+                "with ollama qwen2.5:7b)") in report.text
     finally:
         p.close()
 

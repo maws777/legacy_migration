@@ -21,10 +21,12 @@ llm:
   keep_alive: 2h                        # Ollama only: keep the model loaded between calls
   timeout_s: 180                        # loading qwen2.5:7b partly on CPU took 80 s on the first call
   max_tokens: 150
-  # Prices apply to anthropic only (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million
-  # tokens, converted to EUR). With ollama the cost is 0 EUR; tokens are still recorded.
+  # Anthropic API prices (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million tokens, in EUR).
+  # Real cost with provider anthropic; with ollama the real cost is 0 EUR and these prices give the
+  # "cloud-equivalent cost" of the same tokens in the report and the stats page.
   price_eur_per_input_token: 0.00000092
   price_eur_per_output_token: 0.0000046
+  cloud_reference_model: claude-haiku-4-5
 control_sample:
   size: 50
   seed: 42

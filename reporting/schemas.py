@@ -66,6 +66,39 @@ class ToolCallRecord(BaseModel):
         return iso_z(v)
 
 
+PURPOSE_LABELS = {"resolver": "Resolver_Agent", "schema_discovery": "schema discovery",
+                  "question_advisor": "Question_Advisor", "query_agent": "chat (Query_Agent)",
+                  "legacy_b_query": "Legacy B questions", "question_rephrase": "question rephrasing"}
+
+
+class PurposeUsage(BaseModel):
+    purpose: str
+    input_tokens: int
+    output_tokens: int
+    calls: int
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+class CostBreakdown(BaseModel):
+    run_id: str
+    by_purpose: list[PurposeUsage]
+    input_tokens: int
+    output_tokens: int
+    tokens: int
+    calls: int
+    provider: str
+    model: str
+    real_cost_eur: float
+    cloud_reference: str                    # e.g. "anthropic claude-haiku-4-5"
+    cloud_equivalent_cost_eur: float
+
+    def tokens_by_purpose(self) -> dict[str, int]:
+        return {u.purpose: u.tokens for u in self.by_purpose}
+
+
 class LogFilters(BaseModel):
     source_row: int | None = None
     field: str | None = None
@@ -116,6 +149,11 @@ class RunReport(BaseModel):
     rejected_error: int = 0
     pending_human: int = 0
     cache_state: Literal["cold", "warm"] = "cold"
+    # AI usage attributed to the Run (reporting/cost.py): tokens per purpose, cloud-equivalent cost.
+    tokens_by_purpose: dict[str, int] = {}
+    provider: str = ""
+    cloud_reference: str = ""
+    cloud_equivalent_cost_eur: float = 0.0
 
 
 class RunMetrics(BaseModel):
@@ -132,3 +170,7 @@ class RunMetrics(BaseModel):
     degraded_mode: bool
     legacy_b_lookup: Literal["enabled", "disabled", "failed"]
     counts: dict[RowOutcome, int]
+    # Filled at read time from the same CostBreakdown as the report (not stored in run_metrics).
+    tokens_by_purpose: dict[str, int] = {}
+    real_cost_eur: float = 0.0
+    cloud_equivalent_cost_eur: float = 0.0

@@ -239,3 +239,41 @@ def test_advise_button_runs_a_job_and_shows_the_advice():
     assert any("1,020 tokens" in m.value for m in at.markdown)
     assert any("which system is right" in m.value for m in at.markdown)
     assert not button(at, "Demander l'avis de l'agent").disabled
+
+
+# ---------------------------------------------------------------- AI cost on the stats page (part 4)
+def test_stats_page_shows_the_cost_by_purpose():
+    from reporting.schemas import CostBreakdown, RunInfo
+    from reporting.report import ReportGenerator
+
+    class StatsApi(FakeApi):
+        def runs(self, limit=50):
+            return [RunInfo(run_id="r1", campaign_id="c1", kind="full", status="completed", campaign_status="paused",
+                            started_at=NOW, ended_at=NOW, open_questions=0)]
+
+        def cost(self, run_id):
+            return CostBreakdown(run_id="r1", by_purpose=[
+                {"purpose": "resolver", "input_tokens": 0, "output_tokens": 0, "calls": 0},
+                {"purpose": "schema_discovery", "input_tokens": 2332, "output_tokens": 230, "calls": 1}],
+                input_tokens=2332, output_tokens=230, tokens=2562, calls=1, provider="ollama", model="qwen2.5:7b",
+                real_cost_eur=0.0, cloud_reference="anthropic claude-haiku-4-5", cloud_equivalent_cost_eur=0.00320)
+
+        def report(self, run_id):
+            return ReportGenerator.compose("r1", analysed=1, counts={"MIGRATE": 1}, out_of_scope=0, traced_rows=1,
+                                           input_tokens=0, output_tokens=0, price_in=0, price_out=0, seconds=1,
+                                           loaded=1, cache_state="cold", notes=[])
+
+        def metrics(self, run_id):
+            return None
+
+        def latest_reconciliation(self, scope="control_sample"):
+            return None
+
+        def target_stats(self):
+            return {"diagnostic_operation": 7571, "diag_value_result": 7571}
+
+    at = app(StatsApi(), page="ui/pages/1_stats.py").run()
+    labels = {m.label: m.value for m in at.metric}
+    assert labels["Coût équivalent cloud"] == "0.0032 €" and labels["Tokens (tous usages)"] == "2,562"
+    assert labels["Coût réel (ollama qwen2.5:7b)"] == "0.0000 €"
+    assert any(s.value == "Target_DB" for s in at.subheader)

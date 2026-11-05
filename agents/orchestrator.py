@@ -25,7 +25,7 @@ from rules.fields import normalize_vin
 from hitl.schemas import AnswerResult, HumanAnswer, HumanQuestion
 from reporting.decision_log import UnknownRunError, export_media_type
 from reporting.schemas import (
-    DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
+    CostBreakdown, DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
 )
 from rules.errors import ErrorCode, error_payload
 from rules.types import Action, DecidedBy
@@ -177,16 +177,39 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     @app.get("/ops/runs/{run_id}/report", response_model=RunReport)
     def get_report(run_id: str) -> RunReport:
+        """End-of-run report; its AI usage is recomputed now (schema discovery, advice and chat included)."""
         run_or_404(run_id)
-        return svc().pipeline.reports.build(run_id)
+        return svc().pipeline.report_now(run_id)
 
     @app.get("/ops/runs/{run_id}/metrics", response_model=RunMetrics)
     def get_metrics(run_id: str) -> RunMetrics:
         run_or_404(run_id)
-        m = svc().pipeline.metrics.get(run_id)
+        m = svc().pipeline.metrics_now(run_id)
         if m is None:
             raise UnknownRunError(run_id)
         return m
+
+    @app.get("/ops/runs/{run_id}/cost", response_model=CostBreakdown)
+    def get_cost(run_id: str) -> CostBreakdown:
+        """AI usage attributed to the Run by purpose, real cost and cloud-equivalent cost."""
+        run_or_404(run_id)
+        return svc().pipeline.cost_breakdown(run_id)
+
+    @app.get("/ops/target/stats")
+    def target_stats() -> dict:
+        """Row counts of the Target_DB tables (through the Target_API; in-process when none is configured)."""
+        s = svc()
+        if s.target is None:
+            return {"tables": s.pipeline.target_repo.table_counts()}
+        try:
+            r = s.target.get("/target/stats")
+        except httpx.HTTPError as exc:
+            raise ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: {type(exc).__name__}",
+                           {"backend": "target"}) from None
+        if r.status_code != 200:
+            raise ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: HTTP {r.status_code}",
+                           {"backend": "target"})
+        return r.json()
 
     @app.get("/ops/runs/{run_id}/decisions", response_model=DecisionPage)
     def get_decisions(run_id: str, source_row: int | None = None, field: str | None = None,

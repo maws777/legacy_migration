@@ -11,7 +11,7 @@ from agents.schemas import (
     ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
 )
 from hitl.schemas import AnswerResult, HumanQuestion
-from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
+from reporting.schemas import CostBreakdown, DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
 
 
 class ApiCallError(Exception):
@@ -108,6 +108,12 @@ class OrchestratorClient:
 
     def metrics(self, run_id: str) -> RunMetrics:
         return RunMetrics(**self._call("load metrics", "GET", f"/ops/runs/{run_id}/metrics"))
+
+    def cost(self, run_id: str) -> CostBreakdown:
+        return CostBreakdown(**self._call("load AI cost", "GET", f"/ops/runs/{run_id}/cost"))
+
+    def target_stats(self) -> dict[str, int]:
+        return self._call("load Target_DB counts", "GET", "/ops/target/stats")["tables"]
 
     def decisions(self, run_id: str, *, limit: int = 200, offset: int = 0, **filters) -> DecisionPage:
         params = {k: v for k, v in filters.items() if v not in (None, "")}

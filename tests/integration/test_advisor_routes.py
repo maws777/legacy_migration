@@ -74,3 +74,20 @@ def test_advise_refusals(env):
     q = client.get("/ops/questions", params={"status": "open"}).json()[0]
     client.post(f"/ops/questions/{q['question_id']}/answer", json={"option": "reject_group", "operator": "a"})
     assert client.post(f"/ops/questions/{q['question_id']}/advise", json={}).status_code == 409
+
+
+def test_report_and_metrics_include_advice_tokens(env):
+    p, _, client = env
+    run_id = p.runs.latest_full_run()["run_id"]
+    before = client.get(f"/ops/runs/{run_id}/report").json()
+    q = client.get("/ops/questions", params={"status": "open"}).json()[0]
+    poll(client, client.post(f"/ops/questions/{q['question_id']}/advise", json={}).json()["job_id"])
+    report = client.get(f"/ops/runs/{run_id}/report").json()
+    metrics = client.get(f"/ops/runs/{run_id}/metrics").json()
+    cost = client.get(f"/ops/runs/{run_id}/cost").json()
+    assert report["tokens"] == before["tokens"] + 360                     # 3 advisor calls x 120 tokens
+    assert report["tokens_by_purpose"]["question_advisor"] == 360
+    assert metrics["input_tokens"] + metrics["output_tokens"] == report["tokens"] == cost["tokens"]
+    assert metrics["tokens_by_purpose"] == report["tokens_by_purpose"]
+    assert "Question_Advisor 360" in report["text"] and "Cloud-equivalent cost" in report["text"]
+    assert client.get("/ops/target/stats").json()["tables"]["diagnostic_operation"] > 0
