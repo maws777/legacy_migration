@@ -52,6 +52,15 @@ def test_calls_are_typed():
     assert json.loads(seen[-1][3]) == {"target_phase": 4, "operator": "op"}
 
 
+def test_human_decisions_are_listed_and_revoked():
+    d = {"pattern_key": "ecuCode|X", "kind": "value", "value": "ID1", "answered_at": NOW, "operator": "bob",
+         "question_id": "q1", "field": "ecuCode", "row_count": 3}
+    api, seen = make({("GET", "/ops/decisions"): (200, [d]), ("POST", "/ops/decisions/revoke"): (200, [])})
+    assert api.decisions_made()[0].row_count == 3
+    assert api.revoke_decision("ecuCode|X", "ann") == []
+    assert json.loads(seen[-1][3]) == {"pattern_key": "ecuCode|X", "operator": "ann"}
+
+
 @pytest.mark.parametrize("status,body,fragment", [
     (409, {"error": {"code": "CONFLICT", "message": "question q1 is closed", "details": None}}, "closed"),
     (422, {"error": {"code": "VALIDATION_ERROR", "message": "R5 ecuName in ECUDico", "details": {}}}, "ECUDico"),
@@ -77,3 +86,12 @@ def test_unreachable_api():
 def test_latest_reconciliation_none_on_404():
     api, _ = make({("GET", "/ops/reconciliation/latest"): (404, {"error": {"code": "NOT_FOUND", "message": "none"}})})
     assert api.latest_reconciliation() is None
+
+
+def test_schema_mapping_is_none_before_validation_and_validate_posts_the_proposal():
+    api, seen = make({("GET", "/ops/schema/mapping"): (404, {"error": {"code": "NOT_FOUND", "message": "none"}})})
+    assert api.schema_mapping() is None
+    api, seen = make({("POST", "/ops/schema/validate"): (200, {"mapping": {"VIN": "vin"}, "validated_by": "ann",
+                                                               "validated_at": NOW})})
+    assert api.validate_schema("p1", "ann").validated_by == "ann"
+    assert json.loads(seen[0][3]) == {"proposal_id": "p1", "operator": "ann"}

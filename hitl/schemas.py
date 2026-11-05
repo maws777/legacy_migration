@@ -82,6 +82,17 @@ class HumanDecision(BaseModel):
     question_id: str
 
 
+class DecisionEntry(HumanDecision):
+    """A stored Human_Decision with the context of the question it answered."""
+    field: str | None = None
+    row_count: int | None = None
+
+
+class RevokeRequest(BaseModel):
+    pattern_key: str = Field(min_length=1)
+    operator: str = Field(min_length=1)
+
+
 class AnswerResult(BaseModel):
     question: HumanQuestion
     decision: HumanDecision | None

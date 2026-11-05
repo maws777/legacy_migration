@@ -222,6 +222,24 @@ def test_hitl_routes(pipeline):
     assert client.post("/ops/campaigns/unknown/resume", json={"operator": "a"}).status_code == 409
 
 
+def test_revoked_decision_is_asked_again_by_a_new_full_run(pipeline):
+    from fastapi.testclient import TestClient
+    from agents.orchestrator import Services, create_app
+    client = TestClient(create_app(Services(pipeline=pipeline)))
+    client.post("/ops/campaigns", json={})
+    key = "ecuCode|FORMAT2_NO_DID"
+    q = next(x for x in client.get("/ops/questions", params={"status": "open"}).json() if x["pattern_key"] == key)
+    client.post(f"/ops/questions/{q['question_id']}/answer",
+                json={"option": "apply_value", "value": "ID0002", "operator": "a"})
+    listed = client.get("/ops/decisions").json()
+    assert [d["pattern_key"] for d in listed] == [key] and listed[0]["field"] == q["field"]
+    assert client.post("/ops/decisions/revoke", json={"pattern_key": "nope", "operator": "a"}).status_code == 404
+    assert client.post("/ops/decisions/revoke", json={"pattern_key": key, "operator": "a"}).json() == []
+    second = client.post("/ops/campaigns", json={}).json()
+    reasked = client.get("/ops/questions", params={"status": "open", "run_id": second["run_id"]}).json()
+    assert key in {x["pattern_key"] for x in reasked}
+
+
 # ---------------------------------------------------------------- Legacy B lookup (task 8)
 class _LB:
     def __init__(self, result):

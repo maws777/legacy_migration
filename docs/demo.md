@@ -2,7 +2,7 @@
 
 Each step gives the exact PowerShell command and the expected result. The results below were observed on 4 November 2026 with the services started by `scripts/start_all.ps1`, with Ollama running `qwen2.5:7b` locally and with the Legacy_B_API running, on a laptop with an Intel Core i7-11800H (8 cores), 16 GB of RAM and an NVIDIA GeForce GTX 1650 Max-Q (4 GB). The 10,000-row file has no Unknown_Variant, so the model is only used in step 1 (schema discovery); migrations make zero LLM calls. Without Ollama the counts are the same, step 1 proposes the reference mapping directly, and the reports end with a Degraded_Mode line. run_ids and timestamps differ on every run; counts do not, except the LLM answers of step 1 and of the agent variant, which can vary between runs.
 
-Every API step also exists in the UI (http://127.0.0.1:8501): Home (campaigns), Stats, Questions, Decision log, Phases.
+Every API step also exists in the UI (http://127.0.0.1:8501): a guided five-step journey in French on the Accueil page (understand the file with schema discovery, run, answer questions, verify, switch), plus Résultats, Questions, Journal (decision log) and Bascule (phases).
 
 ## 0. Start from a clean database folder
 
@@ -16,7 +16,7 @@ function Post($path, $body) {
 }
 ```
 
-Expected: first `Loading ollama model qwen2.5:7b (up to 180 s)...` then `Model ready in 2.9 s: ollama qwen2.5:7b at http://localhost:11434` (2.9 s with the model already in memory; 16.9 s after it was unloaded, about 80 s for the very first load on this laptop). If the model cannot load, the script prints the error and the Orchestrator runs in Degraded_Mode. Then six windows (Legacy_A_API, Legacy_B_API, Target_API, Orchestrator, UI, Client_App) and `ready on http://127.0.0.1:800x` for each API; the whole start took 23 s. The Client_App window prints one line per query, for example `K4X1XUHD7DYXA6SMMVNB -> 200 in 32.5 ms | queries 487 | availability ok 487 failed 0 | parity ok 487 failed 0`; the same lines go to `var\demo\client_app.log`. It keeps running during the whole demo; its availability and parity counters must never show a failure.
+Expected: first `Loading ollama model qwen2.5:7b (up to 180 s)...` then `Model ready in 2.9 s: ollama qwen2.5:7b at http://localhost:11434` (2.9 s with the model already in memory; 16.9 s after it was unloaded, about 80 s for the very first load on this laptop). If the model cannot load, the script prints the error and the Orchestrator runs in Degraded_Mode. Then six windows (Legacy_A_API, Legacy_B_API, Target_API, Orchestrator, UI, Client_App) and `ready on http://127.0.0.1:800x` for each API; the whole start took 23 s. The Client_App window prints one line per query, with the backend that answered in brackets (`[LEGACY_A]` until phase 3, `[TARGET]` from phase 4; it comes from the `X-Served-By` header of the Orchestrator), for example `K4X1XUHD7DYXA6SMMVNB -> 200 [LEGACY_A] in 32.5 ms | queries 487 | availability ok 487 failed 0 | parity ok 487 failed 0`; the same lines go to `var\demo\client_app.log`. It keeps running during the whole demo; its availability and parity counters must never show a failure.
 
 ## 1. Schema mapping
 
@@ -234,7 +234,7 @@ row 13 : REJECT R4 FORBIDDEN_CHAR | Row outcome REJECT (R4 FORBIDDEN_CHAR); 9 fi
 row 2 : ASK_HUMAN R8 UNREADABLE | Row outcome ASK_HUMAN (R8 UNREADABLE); 9 field decisions (MIGRATE 7, TRANSFORM 1, ASK_HUMAN 1).
 ```
 
-Row 4 field by field: VIN MIGRATE R1 OK, originTool TRANSFORM R2 MAPPED (`DiagTool` -> `DDT2000`), toolVersion MIGRATE R8 COPIED, Creation_date TRANSFORM R8 DATE_PARSED (`2024-10-08T18:06`), ecuCode MIGRATE R3 FORMAT1 (ID0005), ValueReference MIGRATE R4 OK, ecuName CORRECT R5 DICT_NORMALIZED (`E-PS` -> `EPS`), Vehmodel MIGRATE R6 OK, diagnosticFieId MIGRATE R8 COPIED, then the `_row` record. The CSV export holds every Decision_Record of migration 1. In the UI (page Decision log), filter by Source_Row_Id 4, 13 or 2 to show the same explanations.
+Row 4 field by field: VIN MIGRATE R1 OK, originTool TRANSFORM R2 MAPPED (`DiagTool` -> `DDT2000`), toolVersion MIGRATE R8 COPIED, Creation_date TRANSFORM R8 DATE_PARSED (`2024-10-08T18:06`), ecuCode MIGRATE R3 FORMAT1 (ID0005), ValueReference MIGRATE R4 OK, ecuName CORRECT R5 DICT_NORMALIZED (`E-PS` -> `EPS`), Vehmodel MIGRATE R6 OK, diagnosticFieId MIGRATE R8 COPIED, then the `_row` record. The CSV export holds every Decision_Record of migration 1. In the UI (page Journal), filter by Source_Row_Id 4, 13 or 2 to show the same explanations.
 
 ## 8. Stop
 

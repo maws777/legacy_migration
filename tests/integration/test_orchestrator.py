@@ -52,16 +52,18 @@ def to_phase(s, n):
 
 def test_same_response_in_every_phase(env):
     s, client = env
-    bodies, misses = [], []
+    bodies, misses, served = [], [], []
     for phase in (1, 2, 3, 4):
         to_phase(s, phase)
         r = client.get(f"/api/vehicles/{vin(1).lower()}/diagnostics")
         assert r.status_code == 200
+        served.append(r.headers["X-Served-By"])
         bodies.append(r.json())
         m = client.get("/api/vehicles/VF1AB999999999999999/diagnostics")
-        misses.append((m.status_code, m.json()["error"]["code"]))
+        misses.append((m.status_code, m.json()["error"]["code"], m.headers["X-Served-By"]))
     assert all(b == bodies[0] for b in bodies) and bodies[0]["operations"][0]["creation_date"] == "2024-03-15T10:30"
-    assert set(misses) == {(404, "NOT_FOUND")}
+    assert served == ["legacy_a", "legacy_a", "legacy_a", "target"]
+    assert set(misses) == {(404, "NOT_FOUND", "legacy_a"), (404, "NOT_FOUND", "target")}
     assert s.phase.served["target"] == 2 and s.phase.served["legacy_a"] == 6
 
 

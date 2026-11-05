@@ -10,7 +10,7 @@ from sqlalchemy import (
     insert, select, update,
 )
 
-from hitl.schemas import AnswerResult, ExampleRow, HumanAnswer, HumanDecision, HumanQuestion, LLMSuggestionOut, QuestionGroup
+from hitl.schemas import AnswerResult, DecisionEntry, ExampleRow, HumanAnswer, HumanDecision, HumanQuestion, LLMSuggestionOut, QuestionGroup
 from hitl.store import HumanDecisionStore, STORE_MD
 from hitl.validation import SharedIdView, allowed_values, validate_value
 from rules.config import RuleConfig
@@ -214,6 +214,20 @@ class HITLQueue:
             options=json.loads(r["options"]), status=r["status"], parent_question_id=r["parent_question_id"],
             parent_pattern_key=r["parent_pattern_key"], source_row_id=r["source_row_id"], scope=r["scope"],
             created_at=as_utc(r["created_at"]), closed_at=as_utc(r["closed_at"]))
+
+    # ---------------------------------------------------------------- decisions
+    def list_decisions(self) -> list[DecisionEntry]:
+        """Stored human answers, newest first, with the field and row count of the question they closed."""
+        entries = []
+        for d in self.decisions.all().values():
+            q = self.get(d.question_id)
+            entries.append(DecisionEntry(**d.model_dump(), field=q.field if q else None,
+                                         row_count=q.row_count if q else None))
+        return sorted(entries, key=lambda e: e.answered_at, reverse=True)
+
+    def revoke(self, pattern_key: str) -> bool:
+        """Forget a human answer: the next full Run asks the question again."""
+        return self.decisions.delete(pattern_key)
 
     # ---------------------------------------------------------------- answers
     def answer(self, question_id: str, answer: HumanAnswer) -> AnswerResult:

@@ -27,6 +27,7 @@ class QueryResult:
     available: bool
     parity: bool
     reason: str | None
+    served_by: str | None = None
 
 
 @dataclass
@@ -62,10 +63,11 @@ class ClientApp:
 
     def query(self, vin: str) -> QueryResult:
         t0 = time.perf_counter()
-        status, reason, body = None, None, None
+        status, reason, body, served_by = None, None, None, None
         try:
             r = self.http.get(f"/api/vehicles/{vin}/diagnostics", timeout=self.timeout_s)
             status = r.status_code
+            served_by = r.headers.get("x-served-by")
             if status == 200:
                 body = r.json()
             elif status != 404:
@@ -85,7 +87,7 @@ class ClientApp:
             parity = False
             if status == 404:
                 reason = "parity: control VIN answered 404"
-        return QueryResult(vin, status, round(latency, 1), available, parity, reason)
+        return QueryResult(vin, status, round(latency, 1), available, parity, reason, served_by)
 
     def record(self, res: QueryResult) -> None:
         s = self.stats
@@ -97,7 +99,8 @@ class ClientApp:
         if res.reason:
             s.reasons[res.reason] += 1
         self.results.append(res)
-        self.out(f"{res.vin} -> {res.status if res.status is not None else '---'} in {res.latency_ms} ms"
+        self.out(f"{res.vin} -> {res.status if res.status is not None else '---'} "
+                 f"[{(res.served_by or '?').upper()}] in {res.latency_ms} ms"
                  + (f" ({res.reason})" if res.reason else "") + f" | {s.line()}")
 
     def run(self, max_queries: int | None = None) -> Stats:

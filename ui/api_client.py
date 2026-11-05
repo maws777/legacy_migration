@@ -6,8 +6,8 @@ from typing import Any
 import httpx
 
 from agents.jobs import Job
-from agents.schemas import PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
-from hitl.schemas import AnswerResult, HumanQuestion
+from agents.schemas import ColumnMapping, PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
+from hitl.schemas import AnswerResult, DecisionEntry, HumanQuestion
 from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
 
 
@@ -53,6 +53,18 @@ class OrchestratorClient:
         return Job(**self._call("propose the mapping", "POST", "/ops/jobs/schema-discover", ok=(202,),
                                 params={"source": source}))
 
+    def schema_mapping(self) -> ColumnMapping | None:
+        try:
+            return ColumnMapping(**self._call("load the validated mapping", "GET", "/ops/schema/mapping"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def validate_schema(self, proposal_id: str, operator: str) -> ColumnMapping:
+        return ColumnMapping(**self._call("validate the mapping", "POST", "/ops/schema/validate",
+                                          json={"proposal_id": proposal_id, "operator": operator}))
+
     def job(self, job_id: str) -> Job:
         return Job(**self._call("load job", "GET", f"/ops/jobs/{job_id}"))
 
@@ -95,6 +107,15 @@ class OrchestratorClient:
     def answer(self, question_id: str, option: str, operator: str, value: str | None = None) -> AnswerResult:
         body = {"option": option, "operator": operator, "value": value}
         return AnswerResult(**self._call("answer question", "POST", f"/ops/questions/{question_id}/answer", json=body))
+
+    # ---------------------------------------------------------------- human decisions
+    def decisions_made(self) -> list[DecisionEntry]:
+        return [DecisionEntry(**d) for d in self._call("list human decisions", "GET", "/ops/decisions")]
+
+    def revoke_decision(self, pattern_key: str, operator: str) -> list[DecisionEntry]:
+        return [DecisionEntry(**d) for d in self._call(
+            "cancel a decision", "POST", "/ops/decisions/revoke",
+            json={"pattern_key": pattern_key, "operator": operator})]
 
     # ---------------------------------------------------------------- phases and reconciliation
     def phase(self) -> PhaseStatus:

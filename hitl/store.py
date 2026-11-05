@@ -39,6 +39,11 @@ class HumanDecisionStore:
             with self.engine.begin() as c:
                 _do(c)
 
+    def delete(self, pattern_key: str) -> bool:
+        with self.engine.begin() as c:
+            res = c.execute(delete(human_decision).where(human_decision.c.pattern_key == pattern_key))
+        return bool(res.rowcount)
+
     def get(self, pattern_key: str) -> HumanDecision | None:
         with self.engine.connect() as c:
             r = c.execute(select(human_decision).where(human_decision.c.pattern_key == pattern_key)).mappings().first()

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ from agents.schemas import (
     SchemaProposal, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
 )
 from rules.fields import normalize_vin
-from hitl.schemas import AnswerResult, HumanAnswer, HumanQuestion
+from hitl.schemas import AnswerResult, DecisionEntry, HumanAnswer, HumanQuestion, RevokeRequest
 from reporting.decision_log import UnknownRunError, export_media_type
 from reporting.schemas import (
     DecisionPage, LogFilters, RunInfo, RunMetrics, RunReport, StartRunRequest, ToolCallRecord,
@@ -30,10 +30,15 @@ from rules.errors import ErrorCode, error_payload
 from rules.types import Action, DecidedBy
 
 
+SERVED_BY = "X-Served-By"                           # which backend answered a client query
+
+
 class ApiError(Exception):
-    def __init__(self, status: int, code: ErrorCode, message: str, details: Any = None) -> None:
+    def __init__(self, status: int, code: ErrorCode, message: str, details: Any = None,
+                 headers: dict[str, str] | None = None) -> None:
         super().__init__(message)
         self.status, self.code, self.message, self.details = status, code, message, details
+        self.headers = headers
 
 
 @dataclass
@@ -148,7 +153,8 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     @app.exception_handler(ApiError)
     def _api_error(_request: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content=error_payload(exc.code, exc.message, exc.details))
+        return JSONResponse(status_code=exc.status, content=error_payload(exc.code, exc.message, exc.details),
+                            headers=exc.headers)
 
     @app.exception_handler(UnknownRunError)
     def _unknown_run(_request: Request, exc: UnknownRunError) -> JSONResponse:
@@ -240,6 +246,17 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
         except ValueRejected as exc:
             raise ApiError(422, "VALIDATION_ERROR", exc.failed_rule, {"failed_rule": exc.failed_rule}) from None
 
+    @app.get("/ops/decisions", response_model=list[DecisionEntry])
+    def list_human_decisions() -> list[DecisionEntry]:
+        return svc().pipeline.hitl.list_decisions()
+
+    @app.post("/ops/decisions/revoke", response_model=list[DecisionEntry])
+    def revoke_human_decision(body: RevokeRequest) -> list[DecisionEntry]:
+        """Forget one human answer; returns the remaining ones. The next full Run asks the question again."""
+        if not svc().pipeline.hitl.revoke(body.pattern_key):
+            raise ApiError(404, "NOT_FOUND", f"no human decision for {body.pattern_key}")
+        return svc().pipeline.hitl.list_decisions()
+
     # ---------------------------------------------------------------- schema discovery (task 7)
     @app.post("/ops/schema/discover", response_model=SchemaProposal)
     def discover_schema(source: Literal["llm", "reference"] = "llm") -> SchemaProposal:
@@ -317,10 +334,11 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     # ---------------------------------------------------------------- client routes (task 9)
     def unavailable(backend: str, why: str) -> ApiError:
-        return ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: {why}", {"backend": backend})
+        return ApiError(503, "BACKEND_UNAVAILABLE", f"backend unavailable: {why}", {"backend": backend},
+                        {SERVED_BY: backend})
 
     @app.get("/api/vehicles/{vin}/diagnostics", response_model=DiagnosticsResponse)
-    def client_diagnostics(vin: str, background: BackgroundTasks) -> DiagnosticsResponse:
+    def client_diagnostics(vin: str, background: BackgroundTasks, response: Response) -> DiagnosticsResponse:
         s = svc()
         phase = s.phase.current()                    # read once: the request ends on this backend
         v = normalize_vin(vin)
@@ -333,7 +351,8 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
                 raise unavailable("target", f"HTTP {r.status_code}")
             s.phase.served["target"] += 1
             if r.status_code == 404:
-                raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}")
+                raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}", None, {SERVED_BY: "target"})
+            response.headers[SERVED_BY] = "target"
             return DiagnosticsResponse.model_validate(r.json())
         try:
             rows = s.legacy_a.rows_by_vin(v).rows
@@ -344,7 +363,8 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
         if phase == 3 and s.reconciler is not None:
             background.add_task(s.reconciler.compare_vin_safely, v)
         if not expected:
-            raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}")
+            raise ApiError(404, "NOT_FOUND", f"no diagnostics for VIN {v}", None, {SERVED_BY: "legacy_a"})
+        response.headers[SERVED_BY] = "legacy_a"
         return DiagnosticsResponse(vin=v, operations=[e.item for e in expected])
 
     @app.get("/api/vehicles/{vin}/model", response_model=ModelReference)
