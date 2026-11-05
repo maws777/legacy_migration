@@ -11,6 +11,7 @@ import streamlit as st  # noqa: E402
 from ui.common import (  # noqa: E402
     active_jobs, auto_refresh, client, finished, launch, load, operator, running, show_failure, show_running,
 )
+from ui.mapping import mapping_step  # noqa: E402
 
 st.set_page_config(page_title="Migration engine", layout="wide")
 st.title("Legacy A -> target migration")
@@ -27,8 +28,10 @@ c1.metric("Current phase", phase.current_phase if phase else "?")
 c2.metric("Runs", len(runs))
 c3.metric("Open questions", len(load("q_home", api.questions) or []))
 
+validated = mapping_step(api, op, jobs)
+
 # ---------------------------------------------------------------- campaigns
-st.subheader("Campaigns")
+st.subheader("Étape 2 : campagnes de migration")
 pipeline_job = running(jobs, "campaign") or running(jobs, "resume")
 if pipeline_job is not None:
     show_running(pipeline_job)
@@ -42,7 +45,9 @@ for slot in ("campaign", "resume"):
         else:
             show_failure(done)
 
-if st.button("Start a campaign (Run 1)", disabled=pipeline_job is not None):
+if validated is None:
+    st.caption("« Start a campaign » est désactivé tant qu'aucun mapping n'est validé (étape 1).")
+if st.button("Start a campaign (Run 1)", disabled=pipeline_job is not None or validated is None):
     launch("campaign", lambda: api.start_campaign_job(op))
 paused = sorted({r.campaign_id for r in runs if r.campaign_status == "paused"})
 if paused:

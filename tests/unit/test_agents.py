@@ -243,3 +243,64 @@ def test_schema_routes_show_differences(tmp_path):
     ok = client.post("/ops/schema/validate", json={"proposal_id": ref["proposal_id"], "operator": "ann"})
     assert ok.status_code == 200 and ok.json()["differences_from_reference"] == []
     p.close()
+
+
+# ---------------------------------------------------------------- operator correction (UI mapping step)
+def test_operator_correction_resolves_the_conflicts(tmp_path, cfg):
+    from agents.api_agent_legacy import MappingValueError
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v",
+                          llm=FakeLLM(lambda body: QWEN_ANSWER))
+    agent = p.schema_agent
+    prop = agent.discover()
+    assert agent.latest_proposal().proposal_id == prop.proposal_id
+    partial = dict(prop.column_mapping, originTool="DiagToolsVersions.DiagToolName")
+    with pytest.raises(MappingConflictError) as exc:          # diagnosticFieId and Label still unmapped
+        agent.validate(prop.proposal_id, "ann", partial)
+    still = agent.proposal(exc.value.proposal_id)
+    assert {c.target_attribute for c in still.conflicts} >= {"DiagnosticOperation.diagnosticOpID", "Label"}
+    assert agent.latest_proposal().proposal_id == still.proposal_id   # the corrected proposal is kept
+    fixed = dict(prop.column_mapping, originTool="DiagToolsVersions.DiagToolName",
+                 diagnosticFieId="DiagnosticOperation.diagnosticOpID", ecuCode="DiagValueResult.ValueDescription",
+                 DescriptionDiagECU="Label")
+    validated = agent.validate(prop.proposal_id, "ann", fixed)
+    assert validated.mapping == dict(cfg.column_mapping.mapping) and validated.differences_from_reference == []
+    assert agent.validated_mapping().validated_by == "ann" and agent.latest_proposal() is None
+    with pytest.raises(MappingValueError):
+        agent.corrected(prop.proposal_id, dict(fixed, VIN="Vehicle.Colour"))
+    with pytest.raises(MappingValueError):
+        agent.corrected(prop.proposal_id, {"VIN": "Vehicle.VIN"})
+    p.close()
+
+
+def test_correction_keeping_a_deliberate_difference(tmp_path, cfg):
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v")
+    ref = p.schema_agent.discover(use_llm=False)
+    swapped = dict(ref.column_mapping, toolVersion=None)     # leaves DiagToolVersion unmapped: refused
+    with pytest.raises(MappingConflictError):
+        p.schema_agent.validate(ref.proposal_id, "ann", swapped)
+    assert p.schema_agent.validated_mapping() is None
+    p.close()
+
+
+def test_schema_editor_routes(tmp_path, cfg):
+    from fastapi.testclient import TestClient
+    from agents.orchestrator import Services, create_app
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v",
+                          llm=FakeLLM(lambda body: QWEN_ANSWER))
+    client = TestClient(create_app(Services(pipeline=p)))
+    ref = client.get("/ops/schema/reference").json()
+    assert "Label" in ref["targets"] and ref["mapping"]["VIN"] == "Vehicle.VIN"
+    assert client.get("/ops/schema/proposals/latest").status_code == 404
+    prop = client.post("/ops/schema/discover").json()
+    assert client.get("/ops/schema/proposals/latest").json()["proposal_id"] == prop["proposal_id"]
+    bad = client.post("/ops/schema/validate", json={"proposal_id": prop["proposal_id"], "operator": "ann",
+                                                    "mapping": dict(prop["column_mapping"], VIN="Nope")})
+    assert bad.status_code == 422
+    refused = client.post("/ops/schema/validate", json={"proposal_id": prop["proposal_id"], "operator": "ann",
+                                                        "mapping": prop["column_mapping"]})
+    assert refused.status_code == 409 and "conflict" in refused.json()["error"]["message"]
+    ok = client.post("/ops/schema/validate", json={"proposal_id": prop["proposal_id"], "operator": "ann",
+                                                   "mapping": ref["mapping"]})
+    assert ok.status_code == 200 and ok.json()["validated_by"] == "ann"
+    assert client.get("/ops/schema/mapping").json()["differences_from_reference"] == []
+    p.close()

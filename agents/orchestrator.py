@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from agents.jobs import Job, JobConflict, JobManager
 from agents.schemas import (
     ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
-    SchemaProposal, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
+    SchemaProposal, SchemaReference, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
 )
 from rules.fields import normalize_vin
 from hitl.schemas import AnswerResult, HumanAnswer, HumanQuestion
@@ -251,13 +251,30 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     @app.post("/ops/schema/validate", response_model=ColumnMapping)
     def validate_schema(body: ValidateMappingRequest) -> ColumnMapping:
-        from agents.api_agent_legacy import MappingConflictError
+        """Validate a proposal, or the operator's column-by-column correction of it (``mapping``)."""
+        from agents.api_agent_legacy import MappingConflictError, MappingValueError
         try:
-            return svc().pipeline.schema_agent.validate(body.proposal_id, body.operator)
+            return svc().pipeline.schema_agent.validate(body.proposal_id, body.operator, body.mapping)
         except KeyError:
             raise ApiError(404, "NOT_FOUND", f"unknown proposal {body.proposal_id}") from None
+        except MappingValueError as exc:
+            raise ApiError(422, "VALIDATION_ERROR", str(exc)) from None
         except MappingConflictError as exc:
             raise ApiError(409, "CONFLICT", str(exc), [c.model_dump() for c in exc.conflicts]) from None
+
+    @app.get("/ops/schema/proposals/latest", response_model=SchemaProposal)
+    def latest_proposal() -> SchemaProposal:
+        p = svc().pipeline.schema_agent.latest_proposal()
+        if p is None:
+            raise ApiError(404, "NOT_FOUND", "no Column_Mapping proposal waiting for validation")
+        return p
+
+    @app.get("/ops/schema/reference", response_model=SchemaReference)
+    def schema_reference() -> SchemaReference:
+        from agents.api_agent_legacy import TARGET_ATTRIBUTES
+        cfg = svc().pipeline.config()
+        return SchemaReference(targets=list(TARGET_ATTRIBUTES), required_targets=list(cfg.column_mapping.required_targets),
+                               mapping=dict(cfg.column_mapping.mapping))
 
     @app.get("/ops/schema/mapping", response_model=ColumnMapping)
     def get_mapping() -> ColumnMapping:

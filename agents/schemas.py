@@ -59,6 +59,16 @@ class ColumnMapping(BaseModel):
 class ValidateMappingRequest(BaseModel):
     proposal_id: str
     operator: str = Field(min_length=1)
+    # Operator correction, column by column. Absent or equal to the proposal: the proposal is validated
+    # as it is. Otherwise a corrected proposal is stored, checked for conflicts and validated.
+    mapping: dict[str, str | None] | None = None
+
+
+class SchemaReference(BaseModel):
+    """What the mapping editor needs: allowed target attributes, required ones, reference mapping."""
+    targets: list[str]
+    required_targets: list[str]
+    mapping: dict[str, str | None]
 
 
 class FieldError(BaseModel):

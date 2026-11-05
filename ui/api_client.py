@@ -6,7 +6,9 @@ from typing import Any
 import httpx
 
 from agents.jobs import Job
-from agents.schemas import PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
+from agents.schemas import (
+    ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
+)
 from hitl.schemas import AnswerResult, HumanQuestion
 from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
 
@@ -59,6 +61,35 @@ class OrchestratorClient:
     def jobs(self, active: bool | None = None, kind: str | None = None) -> list[Job]:
         params = {k: v for k, v in (("active", active), ("kind", kind)) if v is not None}
         return [Job(**j) for j in self._call("list jobs", "GET", "/ops/jobs", params=params)]
+
+    # ---------------------------------------------------------------- Column_Mapping
+    def schema_reference(self) -> SchemaReference:
+        return SchemaReference(**self._call("load the reference mapping", "GET", "/ops/schema/reference"))
+
+    def schema_discover(self, source: str = "reference") -> SchemaProposal:
+        return SchemaProposal(**self._call("propose the mapping", "POST", "/ops/schema/discover",
+                                           params={"source": source}))
+
+    def latest_proposal(self) -> SchemaProposal | None:
+        try:
+            return SchemaProposal(**self._call("load the mapping proposal", "GET", "/ops/schema/proposals/latest"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def validated_mapping(self) -> ColumnMapping | None:
+        try:
+            return ColumnMapping(**self._call("load the validated mapping", "GET", "/ops/schema/mapping"))
+        except ApiCallError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def validate_mapping(self, proposal_id: str, operator: str,
+                         mapping: dict[str, str | None] | None = None) -> ColumnMapping:
+        body = {"proposal_id": proposal_id, "operator": operator, "mapping": mapping}
+        return ColumnMapping(**self._call("validate the mapping", "POST", "/ops/schema/validate", json=body))
 
     # ---------------------------------------------------------------- runs (synchronous routes)
     def start_campaign(self, operator: str | None) -> RunInfo:

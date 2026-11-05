@@ -6,7 +6,8 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from agents.jobs import Job
-from agents.schemas import PhaseStatus
+from agents.schemas import ColumnMapping, MappingConflict, PhaseStatus, SchemaProposal, SchemaReference
+from ui.api_client import ApiCallError
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc)
@@ -19,11 +20,57 @@ def job(kind="campaign", status="running", **kw):
     return Job(**base)
 
 
+REFERENCE = {"originTool": "DiagToolsVersions.DiagToolName", "VIN": "Vehicle.VIN"}
+TARGETS = ["Vehicle.VIN", "DiagToolsVersions.DiagToolName", "Label"]
+
+
+def validated(by="ann"):
+    return ColumnMapping(mapping=REFERENCE, validated_by=by, validated_at=NOW)
+
+
+def proposal(mapping, conflicts=(), fallback=False):
+    diffs = [{"column": c, "proposed": t, "reference": REFERENCE.get(c)} for c, t in mapping.items()
+             if t != REFERENCE.get(c)]
+    return SchemaProposal(proposal_id="p1", column_mapping=mapping, formats=[], format_criterion="x",
+                          conflicts=list(conflicts), fallback=fallback, created_at=NOW,
+                          differences_from_reference=diffs)
+
+
 class FakeApi:
-    def __init__(self, active=(), mapping=None):
+    def __init__(self, active=(), mapping="validated", latest=None):
         self.active = list(active)
         self.started = []
-        self.mapping = mapping
+        self.mapping = validated() if mapping == "validated" else mapping
+        self.latest = latest
+        self.validations = []
+        self.discover_jobs = []
+
+    def validated_mapping(self):
+        return self.mapping
+
+    def latest_proposal(self):
+        return self.latest
+
+    def schema_reference(self):
+        return SchemaReference(targets=TARGETS, required_targets=TARGETS[:2], mapping=REFERENCE)
+
+    def schema_discover(self, source="reference"):
+        self.latest = proposal(REFERENCE, fallback=True)
+        return self.latest
+
+    def schema_discover_job(self, source="llm"):
+        self.discover_jobs.append(source)
+        j = job("schema_discover", status="queued", label="schema discovery", lane="llm")
+        self.active = [j]
+        return j
+
+    def validate_mapping(self, proposal_id, operator, mapping=None):
+        self.validations.append((proposal_id, operator, mapping))
+        if mapping.get("originTool") is None:
+            raise ApiCallError("validate the mapping", "HTTP 409: 1 Column_Mapping conflict(s): "
+                               "DiagToolsVersions.DiagToolName is mapped by 0 column(s)", 409)
+        self.mapping = validated(operator)
+        return self.mapping
 
     def jobs(self, active=None, kind=None):
         return list(self.active)
@@ -90,3 +137,54 @@ def test_finished_job_result_is_shown():
     at.run()
     assert any("Run r1 completed" in s.value and "3 open question" in s.value for s in at.success)
     assert not button(at, "Start a campaign").disabled
+
+
+# ---------------------------------------------------------------- mapping step (part 2)
+def test_no_validated_mapping_disables_the_campaign():
+    at = app(FakeApi(mapping=None)).run()
+    assert any("Aucun mapping validé" in w.value for w in at.warning)
+    assert button(at, "Start a campaign").disabled
+
+
+def test_validated_mapping_status():
+    at = app(FakeApi()).run()
+    assert any("Mapping validé par ann le 04/11/2026" in s.value for s in at.success)
+    assert not button(at, "Start a campaign").disabled
+
+
+def test_ai_proposal_is_a_job_and_shows_conflicts_and_differences():
+    api = FakeApi(mapping=None)
+    at = app(api).run()
+    button(at, "Proposer le mapping avec l'IA").click().run()
+    assert api.discover_jobs == ["llm"] and button(at, "Proposer le mapping avec l'IA").disabled
+    wrong = proposal({"originTool": None, "VIN": "Vehicle.VIN"}, conflicts=[MappingConflict(
+        target_attribute="DiagToolsVersions.DiagToolName", source_columns=[],
+        message="DiagToolsVersions.DiagToolName is mapped by 0 column(s)")])
+    api.active = []
+    api.job = lambda job_id: job("schema_discover", status="succeeded", label="schema discovery",
+                                 result=wrong.model_dump(mode="json"), seconds=31.0)
+    at.run()
+    assert any("1 différence(s)" in m.value for m in at.markdown)
+    assert any("Validation refusée tant qu'il reste 1 conflit" in e.value for e in at.error)
+    assert [s.label for s in at.selectbox][:2] == ["originTool", "VIN"]
+
+
+def test_operator_corrects_then_validates():
+    api = FakeApi(mapping=None, latest=proposal({"originTool": None, "VIN": "Vehicle.VIN"}))
+    at = app(api, operator="carla").run()
+    at.button(key="FormSubmitter:mapping_form-Valider le mapping").click().run()
+    assert api.validations[-1] == ("p1", "carla", {"originTool": None, "VIN": "Vehicle.VIN"})
+    assert any("Validation refusée" in e.value for e in at.error) and api.mapping is None
+    at.selectbox[0].select("DiagToolsVersions.DiagToolName")          # form: sent with the submit click
+    at.button(key="FormSubmitter:mapping_form-Valider le mapping").click().run()
+    assert api.validations[-1][2] == {"originTool": "DiagToolsVersions.DiagToolName", "VIN": "Vehicle.VIN"}
+    assert any("Mapping validé par carla" in s.value for s in at.success)
+    assert not button(at, "Start a campaign").disabled
+
+
+def test_reference_mapping_button():
+    api = FakeApi(mapping=None)
+    at = app(api).run()
+    button(at, "Utiliser le mapping de référence").click().run()
+    assert any("Mapping de référence (Rule_Config)" in m.value for m in at.markdown)
+    assert any("Aucune différence" in m.value for m in at.markdown)
