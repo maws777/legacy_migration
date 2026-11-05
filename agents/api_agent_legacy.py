@@ -9,7 +9,7 @@ from typing import Callable, Protocol
 import httpx
 from sqlalchemy import Boolean, Column, DateTime, Engine, MetaData, String, Table, Text, delete, insert, select, update
 
-from agents.schemas import ColumnMapping, FormatSpec, MappingConflict, SchemaProposal
+from agents.schemas import ColumnMapping, FormatSpec, MappingConflict, MappingDifference, SchemaProposal
 from legacy_a.schemas import Header, RowsPage, VinRows
 from legacy_a.store import LegacyAStore
 from rules.config import RuleConfig
@@ -109,7 +109,40 @@ def find_conflicts(mapping: dict[str, str | None], required: tuple[str, ...]) ->
     for target in required:
         cols = sorted(c for c, t in mapping.items() if t == target)
         if len(cols) != 1:
-            out.append(MappingConflict(target_attribute=target, source_columns=cols))
+            out.append(MappingConflict(
+                target_attribute=target, source_columns=cols,
+                message=f"{target} is mapped by {len(cols)} column(s){': ' + ', '.join(cols) if cols else ''}"))
+    return out
+
+
+def duplicate_conflicts(duplicates: dict[str, list]) -> list[MappingConflict]:
+    """A column given several times in the LLM answer is a conflict, even with the same target."""
+    out = []
+    for column, targets in sorted(duplicates.items()):
+        shown = " / ".join(str(t) for t in targets)
+        out.append(MappingConflict(
+            target_attribute=" / ".join(sorted({str(t) for t in targets})), source_columns=[column],
+            kind="duplicate_column",
+            message=f"column {column} appears {len(targets)} times in the LLM answer ({shown})"))
+    return out
+
+
+def mapping_differences(mapping: dict[str, str | None], reference: dict[str, str | None]) -> list[MappingDifference]:
+    """Column by column, in header order then reference order, where the proposal differs from the reference."""
+    columns = list(mapping) + [c for c in reference if c not in mapping]
+    return [MappingDifference(column=c, proposed=mapping.get(c), reference=reference.get(c))
+            for c in columns if mapping.get(c) != reference.get(c)]
+
+
+def _pairs_keeping_duplicates(pairs):
+    """``object_pairs_hook``: a dict whose ``__duplicates__`` entry lists repeated keys with all their values."""
+    out, seen = {}, {}
+    for k, v in pairs:
+        seen.setdefault(k, []).append(v)
+        out[k] = v
+    dups = {k: vs for k, vs in seen.items() if len(vs) > 1}
+    if dups:
+        out["__duplicates__"] = dups
     return out
 
 
@@ -135,25 +168,28 @@ class SchemaDiscoveryAgent:
         ref = cfg.column_mapping.mapping
         return {h: ref.get(h) for h in header}
 
-    def discover(self, run_id: str = "schema-discovery") -> SchemaProposal:
+    def discover(self, run_id: str = "schema-discovery", use_llm: bool = True) -> SchemaProposal:
+        """Propose a Column_Mapping (LLM, or the reference of Rule_Config when ``use_llm`` is False or the
+        LLM is unavailable or fails). Conflicts and differences from the reference are part of the proposal."""
         cfg = self._config()
         header = self.source.header()
-        mapping, formats, criterion, fallback = None, DEFAULT_FORMATS, DEFAULT_CRITERION, True
-        if self.llm is not None and self.llm.is_available():
+        mapping, formats, criterion, fallback, duplicates = None, DEFAULT_FORMATS, DEFAULT_CRITERION, True, {}
+        if use_llm and self.llm is not None and self.llm.is_available():
             sample = self.source.rows_page(1, cfg.pipeline.discovery_sample_size).rows
             res = self.llm.complete(run_id=run_id, purpose="schema_discovery", system=SYSTEM,
                                     prompt=self._prompt(header, [r.values for r in sample], cfg), max_tokens=800)
             if res.ok:
                 parsed = self._parse(res.text, header)
                 if parsed is not None:
-                    mapping, formats, criterion = parsed
+                    mapping, formats, criterion, duplicates = parsed
                     fallback = False
         if mapping is None:
             mapping = self._reference(header, cfg)
+        conflicts = duplicate_conflicts(duplicates) + find_conflicts(mapping, cfg.column_mapping.required_targets)
         proposal = SchemaProposal(
             proposal_id=str(uuid.uuid4()), column_mapping=mapping, formats=formats, format_criterion=criterion,
-            conflicts=find_conflicts(mapping, cfg.column_mapping.required_targets), fallback=fallback,
-            created_at=utcnow())
+            conflicts=conflicts, fallback=fallback, created_at=utcnow(),
+            differences_from_reference=mapping_differences(mapping, dict(cfg.column_mapping.mapping)))
         with self.engine.begin() as c:
             c.execute(insert(column_mapping).values(
                 id=proposal.proposal_id, status="proposed", mapping=json.dumps(mapping),
@@ -164,33 +200,39 @@ class SchemaDiscoveryAgent:
 
     @staticmethod
     def _parse(text: str, header: list[str]):
+        """(mapping, formats, criterion, duplicate columns) from the LLM answer, or None when unreadable."""
         m = _JSON.search(text or "")
         if not m:
             return None
         try:
-            data = json.loads(m.group(0))
+            data = json.loads(m.group(0), object_pairs_hook=_pairs_keeping_duplicates)
             raw = data["column_mapping"]
             if not isinstance(raw, dict):
                 return None
+            duplicates = {k: v for k, v in (raw.pop("__duplicates__", None) or {}).items()}
             mapping = {h: (raw.get(h) if raw.get(h) in TARGET_ATTRIBUTES else None) for h in header}
             formats = [FormatSpec(**f) for f in data.get("formats", [])] or DEFAULT_FORMATS
             criterion = str(data.get("format_criterion") or DEFAULT_CRITERION)
         except (ValueError, KeyError, TypeError):
             return None
-        return mapping, formats, criterion
+        return mapping, formats, criterion, duplicates
 
     def proposal(self, proposal_id: str) -> SchemaProposal | None:
         with self.engine.connect() as c:
             r = c.execute(select(column_mapping).where(column_mapping.c.id == proposal_id)).mappings().first()
         if r is None:
             return None
+        mapping = json.loads(r["mapping"])
         return SchemaProposal(
-            proposal_id=r["id"], column_mapping=json.loads(r["mapping"]),
+            proposal_id=r["id"], column_mapping=mapping,
             formats=[FormatSpec(**f) for f in json.loads(r["formats"])], format_criterion=r["format_criterion"],
             conflicts=[MappingConflict(**x) for x in json.loads(r["conflicts"])], fallback=r["fallback"],
-            created_at=as_utc(r["created_at"]))
+            created_at=as_utc(r["created_at"]),
+            differences_from_reference=mapping_differences(mapping, dict(self._config().column_mapping.mapping)))
 
     def validate(self, proposal_id: str, operator: str) -> ColumnMapping:
+        """Human validation; refused while conflicts remain. The answer repeats the differences from the
+        reference so the operator sees exactly what is being accepted."""
         p = self.proposal(proposal_id)
         if p is None:
             raise KeyError(proposal_id)
@@ -201,7 +243,8 @@ class SchemaDiscoveryAgent:
             c.execute(delete(column_mapping).where(column_mapping.c.status == "validated"))
             c.execute(update(column_mapping).where(column_mapping.c.id == proposal_id).values(
                 status="validated", validated_by=operator, validated_at=naive_utc(now)))
-        return ColumnMapping(mapping=p.column_mapping, validated_by=operator, validated_at=now)
+        return ColumnMapping(mapping=p.column_mapping, validated_by=operator, validated_at=now,
+                             differences_from_reference=p.differences_from_reference)
 
     def validated_mapping(self) -> ColumnMapping | None:
         with self.engine.connect() as c:

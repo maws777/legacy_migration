@@ -15,7 +15,8 @@ llm:
   provider: ollama
   model: qwen2.5:7b
   base_url: http://localhost:11434      # Ollama only
-  timeout_s: 60                         # a local model can take several seconds on the first call
+  keep_alive: 2h                        # Ollama only: keep the model loaded between calls
+  timeout_s: 180                        # loading qwen2.5:7b partly on CPU took 80 s on the first call
   max_tokens: 150
   # Prices apply to anthropic only (approximate Claude Haiku 4.5 list prices, USD 1 / 5 per million
   # tokens, converted to EUR). With ollama the cost is 0 EUR; tokens are still recorded.

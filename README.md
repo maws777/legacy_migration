@@ -44,7 +44,15 @@ The LLM is optional. The provider is set in `rules/config/pipeline.yaml` (`llm.p
    Invoke-RestMethod http://localhost:11434/api/tags | Select-Object -ExpandProperty models | Select-Object name
    ```
 
-The LLM_Client calls `POST http://localhost:11434/api/chat` with a forced JSON answer (`"format": "json"`) and counts tokens from `prompt_eval_count` and `eval_count`. The first call can take several seconds while the model loads (`llm.timeout_s` is 60 s).
+4. Warm the model up (loads it and waits for one short answer; `scripts\start_all.ps1` does it too):
+
+   ```powershell
+   .venv\Scripts\python.exe -m migration warmup
+   ```
+
+   Expected: `Model ready in ... s: ollama qwen2.5:7b at http://localhost:11434`, or the error returned by Ollama (for example an out-of-memory message).
+
+The LLM_Client calls `POST http://localhost:11434/api/chat` with a forced JSON answer (`"format": "json"`) and `keep_alive: 2h`, so the model stays loaded between Runs, and counts tokens from `prompt_eval_count` and `eval_count`. Loading the model can be slow: on a laptop with 16 GB of RAM and a 4 GB GPU the first call took 80 s, later calls 3 to 10 s (`llm.timeout_s` is 180 s). Close memory-hungry applications first: a load with about 1 GB of free RAM failed with an out-of-memory error. Measured times and tokens are in `docs/cost-performance.md`.
 
 ### Switch back to Anthropic
 
@@ -80,7 +88,7 @@ A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6)
 .venv\Scripts\python.exe -m migration schema --operator <your-name> --no-llm    # reference mapping, no LLM
 ```
 
-Expected: the 10 source columns with their target attributes, then `Column_Mapping validated by <your-name>`. If the LLM proposal maps a target attribute to zero or two columns, the command lists the conflicts and validates nothing; run it again with `--no-llm`. With the services running, the same step is `POST /ops/schema/discover` then `POST /ops/schema/validate` (see `docs/demo.md`).
+Expected: the 10 source columns with their target attributes, the differences from the reference mapping column by column, then `Column_Mapping validated by <your-name>`. If the LLM proposal maps a target attribute to zero or two columns, or repeats a column, the command lists the conflicts, validates nothing and exits with code 1; run it again with `--no-llm` to validate the reference mapping. With `qwen2.5:7b` this is the normal case: its proposal on the dataset was wrong and was refused (see `docs/lessons-learnt.md`). With the services running, the same step is `POST /ops/schema/discover` (`?source=reference` for the reference mapping) then `POST /ops/schema/validate` (see `docs/demo.md`).
 
 ## Run
 

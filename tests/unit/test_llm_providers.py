@@ -18,10 +18,14 @@ def ollama(handler, **cfg_kw):
     return LLMClient(cfg, make_engine("sqlite:///:memory:"), http_client=http)
 
 
-def chat_ok(seen):
+def chat_ok(seen, loads=None):
     def handler(req: httpx.Request):
         if req.url.path == "/api/tags":
             return httpx.Response(200, json=TAGS)
+        if req.url.path == "/api/generate":          # model load (no prompt)
+            if loads is not None:
+                loads.append(json.loads(req.content))
+            return httpx.Response(200, json={"model": "qwen2.5:7b", "done": True, "done_reason": "load"})
         seen.append(json.loads(req.content))
         return httpx.Response(200, json={"model": "qwen2.5:7b", "done": True, "prompt_eval_count": 42,
                                          "eval_count": 17, "message": {"role": "assistant", "content": '{"a": 1}'}})
@@ -115,3 +119,51 @@ def test_no_llm():
     n = NoLLM()
     assert n.availability() == (False, "LLM disabled (--no-llm)") and not n.is_available()
     assert not n.complete(run_id="r").ok and n.totals("r").calls == 0
+
+
+def test_keep_alive_and_timeout_defaults():
+    llm = load_rule_config().pipeline.llm
+    assert (llm.keep_alive, llm.timeout_s) == ("2h", 180)
+    seen, loads = [], []
+    client = ollama(chat_ok(seen, loads))
+    assert client.is_available() and loads == [{"model": "qwen2.5:7b", "keep_alive": "2h"}]
+    client.complete(run_id="r", purpose="resolver", system="s", prompt="p")
+    assert seen[0]["keep_alive"] == "2h"
+
+
+def test_ollama_error_message_is_kept():
+    oom = "llama-server reported out-of-memory during startup: failed to allocate CUDA_Host buffer"
+
+    def handler(req):
+        if req.url.path == "/api/tags":
+            return httpx.Response(200, json=TAGS)
+        return httpx.Response(500, json={"error": oom})
+
+    client = ollama(handler)
+    ok, reason = client.availability()
+    assert not ok and reason == f"Ollama could not load qwen2.5:7b (HTTP 500: {oom})"
+    res = client.complete(run_id="r", purpose="resolver", system="s", prompt="p")
+    assert not res.ok and res.message == f"HTTP 500: {oom}"
+    ready, _, detail = client.warm_up()
+    assert not ready and oom in detail
+
+
+def test_ollama_load_timeout_reason():
+    def handler(req):
+        if req.url.path == "/api/tags":
+            return httpx.Response(200, json=TAGS)
+        raise httpx.ReadTimeout("slow", request=req)
+
+    ok, reason = ollama(handler).availability()
+    assert not ok and reason.startswith("Ollama did not load qwen2.5:7b within 180 s")
+
+
+def test_warm_up():
+    seen = []
+    ready, seconds, detail = ollama(chat_ok(seen)).warm_up()
+    assert ready and seconds >= 0 and detail == "ollama qwen2.5:7b at http://localhost:11434"
+    assert seen[0]["options"]["num_predict"] == 10
+    cfg = LLMConfig(provider="anthropic", model="claude-haiku-4-5", price_eur_per_input_token=0,
+                    price_eur_per_output_token=0)
+    no_key = LLMClient(cfg, make_engine("sqlite:///:memory:"), lambda key, t: pytest.fail("no paid call"))
+    assert no_key.warm_up()[0] is False

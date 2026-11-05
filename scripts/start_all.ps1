@@ -33,6 +33,13 @@ if (-not (Test-Path (Join-Path $root "legacy_b\data\legacy_b_records.csv"))) {
     try { & $python -m legacy_b.simulator } finally { Pop-Location }
 }
 
+if (-not $NoLLM) {
+    # Warm up the LLM model so the first Run does not pay the load time (about 80 s for qwen2.5:7b here).
+    Push-Location $root
+    try { & $python -m migration warmup } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { Write-Warning "LLM model not ready: the Orchestrator will run in Degraded_Mode." }
+}
+
 $targetDb = (Join-Path $VarDir "target.db") -replace "\\", "/"
 $services = @(
     @{ Name = "Legacy_A_API :8001"; Port = 8001; Health = "/legacy-a/health"; Env = @{ LEGACY_A_CSV = $Source }
@@ -73,7 +80,13 @@ foreach ($s in $services) {
     }
     $lines = @("`$Host.UI.RawUI.WindowTitle = $(Quote $s.Name)", "Set-Location -LiteralPath $(Quote $root)")
     foreach ($kv in $s.Env.GetEnumerator()) { $lines += "`$env:$($kv.Key) = $(Quote $kv.Value)" }
-    $lines += "& $(Quote $python) $($s.Args)"
+    if ($s.Name -eq "Client_App") {
+        # Same output in the window and in <VarDir>\client_app.log (unbuffered), to check the counters later.
+        $clientLog = Join-Path (Join-Path $root $VarDir) "client_app.log"
+        $lines += "& $(Quote $python) -u $($s.Args) | Tee-Object -FilePath $(Quote $clientLog)"
+    } else {
+        $lines += "& $(Quote $python) $($s.Args)"
+    }
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($lines -join "; "))
     $proc = Start-Process powershell.exe -WorkingDirectory $root -PassThru `
         -ArgumentList @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded)
@@ -89,4 +102,5 @@ Write-Host ""
 Write-Host "UI:           http://127.0.0.1:8501"
 Write-Host "Orchestrator: http://127.0.0.1:8000/docs"
 Write-Host "Data:         source $Source, databases in $VarDir"
+if (-not $NoClient) { Write-Host "Client_App:   output also in $VarDir\client_app.log" }
 Write-Host "Stop all:     powershell -ExecutionPolicy Bypass -File scripts\stop_all.ps1"

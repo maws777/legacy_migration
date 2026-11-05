@@ -139,8 +139,24 @@ class AnthropicProvider:
         return "provider_error"
 
 
+def ollama_error(r: httpx.Response) -> str:
+    """``HTTP <status>: <message returned by Ollama>`` (e.g. an out-of-memory error at model load)."""
+    try:
+        data = r.json()
+        detail = str(data.get("error") or "") if isinstance(data, dict) else ""
+    except ValueError:
+        detail = r.text or ""                       # not JSON: keep the raw body
+    detail = detail.strip()
+    if len(detail) > 300:
+        detail = detail[:297] + "..."
+    return f"HTTP {r.status_code}" + (f": {detail}" if detail else "")
+
+
 class OllamaProvider:
-    """Local Ollama server: ``/api/chat`` with a forced JSON answer, no streaming, temperature 0."""
+    """Local Ollama server: ``/api/chat`` with a forced JSON answer, no streaming, temperature 0.
+
+    Every request carries ``keep_alive`` so the model stays loaded between calls.
+    """
 
     name = "ollama"
 
@@ -149,13 +165,14 @@ class OllamaProvider:
         self.http = http or httpx.Client(base_url=cfg.base_url, timeout=cfg.timeout_s, transport=OLLAMA_TRANSPORT)
 
     def availability(self) -> tuple[bool, str | None]:
+        """Server reachable, model pulled, and model loaded in memory (the load fails on lack of memory)."""
         where = f"Ollama unreachable at {self.cfg.base_url}"
         try:
             r = self.http.get("/api/tags", timeout=min(AVAILABILITY_TIMEOUT_S, self.cfg.timeout_s))
         except httpx.HTTPError as exc:
             return False, f"{where} ({type(exc).__name__})"
         if r.status_code != 200:
-            return False, f"{where} (HTTP {r.status_code})"
+            return False, f"{where} ({ollama_error(r)})"
         try:
             names = {n for m in r.json().get("models", []) for n in (m.get("name"), m.get("model")) if n}
         except (ValueError, AttributeError):
@@ -163,25 +180,36 @@ class OllamaProvider:
         model = self.cfg.model
         if model not in names and f"{model}:latest" not in names:
             return False, f"Ollama model {model} is not pulled (run: ollama pull {model})"
+        # A generate request without a prompt only loads the model (no-op when it is already loaded).
+        try:
+            r = self.http.post("/api/generate", json={"model": model, "keep_alive": self.cfg.keep_alive})
+        except httpx.TimeoutException as exc:
+            return False, f"Ollama did not load {model} within {self.cfg.timeout_s:g} s ({type(exc).__name__})"
+        except httpx.HTTPError as exc:
+            return False, f"{where} ({type(exc).__name__})"
+        if r.status_code != 200:
+            return False, f"Ollama could not load {model} ({ollama_error(r)})"
         return True, None
 
     def call(self, system: str, prompt: str, max_tokens: int) -> tuple[str, int, int, str]:
-        body = {"model": self.cfg.model, "stream": False, "format": "json",
+        body = {"model": self.cfg.model, "stream": False, "format": "json", "keep_alive": self.cfg.keep_alive,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
                 "options": {"temperature": 0, "num_predict": max_tokens}}
         try:
             r = self.http.post("/api/chat", json=body)
         except httpx.TimeoutException as exc:
-            raise ProviderError("timeout", type(exc).__name__) from None
+            raise ProviderError("timeout", f"{type(exc).__name__} after {self.cfg.timeout_s:g} s") from None
         except httpx.HTTPError as exc:
             raise ProviderError("provider_error", type(exc).__name__) from None
         try:
             data = r.json()
         except ValueError:
             data = {}
+        if not isinstance(data, dict):
+            data = {}
         tin, tout = int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0)
         if r.status_code != 200:
-            raise ProviderError("provider_error", f"HTTPStatusError (HTTP {r.status_code})", tin, tout)
+            raise ProviderError("provider_error", ollama_error(r), tin, tout)
         text = (data.get("message") or {}).get("content") or ""
         return text, tin, tout, data.get("model") or self.cfg.model
 
@@ -240,6 +268,24 @@ class LLMClient:
                                    func.coalesce(func.sum(llm_call.c.output_tokens), 0), func.count())
                             .where(llm_call.c.run_id == run_id)).one()
         return RunTokenTotals(int(row[0]), int(row[1]), int(row[2]))
+
+    def warm_up(self) -> tuple[bool, float, str]:
+        """Load the model and send one short request, so the first Run does not pay the load time.
+
+        Returns (ready, seconds, detail). For anthropic only the key is checked (no paid call).
+        """
+        t0 = time.perf_counter()
+        ok, reason = self.availability()
+        if not ok:
+            return False, round(time.perf_counter() - t0, 1), reason or "provider not available"
+        if self.cfg.provider == "anthropic":
+            return True, round(time.perf_counter() - t0, 1), f"anthropic {self.cfg.model}: key present"
+        res = self.complete(run_id="warm-up", purpose="resolver", system="Reply with JSON only.",
+                            prompt='Return {"ready": true}.', max_tokens=10)
+        secs = round(time.perf_counter() - t0, 1)
+        if not res.ok:
+            return False, secs, f"{res.error_type}: {res.message}"
+        return True, secs, f"ollama {self.cfg.model} at {self.cfg.base_url}"
 
 
 class NoLLM:

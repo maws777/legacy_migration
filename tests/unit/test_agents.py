@@ -178,3 +178,68 @@ def test_pending_mapping_and_header_mismatch_process_zero_rows(tmp_path):
     assert info.status == "mapping_pending" and rep.analysed == 0
     assert "['VehModel']" in rep.text and "['Vehmodel']" in rep.text
     p.close()
+
+
+# Answer returned by qwen2.5:7b on the 10,000-row file (4 November 2026): duplicate "toolVersion" key,
+# ecuCode and DescriptionDiagECU mapped to the wrong targets, originTool and diagnosticFieId missing.
+QWEN_ANSWER = (
+    '{"column_mapping": {"VIN": "Vehicle.VIN", "Vehmodel": "Vehicle.VehicleModel", "ecuName": "DiagnozedECU.ecuName", '
+    '"ecuCode": "DiagToolsVersions.DiagToolName", "toolVersion": "DiagToolsVersions.DiagToolVersion", '
+    '"Creation_date": "DiagnosticOperation.creationDate", "ValueReference": "DiagValueResult.ValueReference", '
+    '"DescriptionDiagECU": "DiagValueResult.ValueDescription", "toolVersion": "DiagToolsVersions.DiagToolVersion", '
+    '"DiagnosticOperation.diagnosticOpID": "Label"}, "formats": [{"name": "Format_1", "ecuCode_pattern": '
+    '"^[A-Z0-9]{12}$"}, {"name": "Format_2", "ecuCode_pattern": "^Id[0-9]{4}$"}], "format_criterion": "x"}')
+
+
+def test_real_qwen_answer_is_blocked_with_duplicates_and_differences(tmp_path, cfg):
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v",
+                          llm=FakeLLM(lambda body: QWEN_ANSWER))
+    prop = p.schema_agent.discover()
+    assert not prop.fallback
+    dup = [c for c in prop.conflicts if c.kind == "duplicate_column"]
+    assert [(c.source_columns, c.target_attribute) for c in dup] == [(["toolVersion"], "DiagToolsVersions.DiagToolVersion")]
+    assert "appears 2 times" in dup[0].message
+    counts = {c.target_attribute for c in prop.conflicts if c.kind == "target_count"}
+    assert counts == {"DiagnosticOperation.diagnosticOpID", "Label"}
+    diffs = {d.column: (d.proposed, d.reference) for d in prop.differences_from_reference}
+    assert diffs == {
+        "originTool": (None, "DiagToolsVersions.DiagToolName"),
+        "diagnosticFieId": (None, "DiagnosticOperation.diagnosticOpID"),
+        "ecuCode": ("DiagToolsVersions.DiagToolName", "DiagValueResult.ValueDescription"),
+        "DescriptionDiagECU": ("DiagValueResult.ValueDescription", "Label"),
+    }
+    with pytest.raises(MappingConflictError):
+        p.schema_agent.validate(prop.proposal_id, "ann")
+    assert p.schema_agent.proposal(prop.proposal_id).differences_from_reference == prop.differences_from_reference
+    # The operator then asks for the reference mapping and validates it: no difference left.
+    ref = p.schema_agent.discover(use_llm=False)
+    assert ref.fallback and ref.conflicts == [] and ref.differences_from_reference == []
+    assert p.schema_agent.validate(ref.proposal_id, "ann").differences_from_reference == []
+    p.close()
+
+
+def test_same_column_twice_with_the_same_target_is_a_conflict(tmp_path, cfg):
+    good = json.dumps({"column_mapping": dict(cfg.column_mapping.mapping)})
+    dup = good[:-2] + ', "VIN": "Vehicle.VIN"}}'
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v",
+                          llm=FakeLLM(lambda body: dup))
+    prop = p.schema_agent.discover()
+    assert [c.kind for c in prop.conflicts] == ["duplicate_column"] and prop.differences_from_reference == []
+    p.close()
+
+
+def test_schema_routes_show_differences(tmp_path):
+    from fastapi.testclient import TestClient
+    from agents.orchestrator import Services, create_app
+    p = MigrationPipeline(write_csv(tmp_path / "s.csv", [base_row(1)]), var_dir=tmp_path / "v",
+                          llm=FakeLLM(lambda body: QWEN_ANSWER))
+    client = TestClient(create_app(Services(pipeline=p)))
+    prop = client.post("/ops/schema/discover").json()
+    assert len(prop["differences_from_reference"]) == 4 and prop["conflicts"]
+    refused = client.post("/ops/schema/validate", json={"proposal_id": prop["proposal_id"], "operator": "ann"})
+    assert refused.status_code == 409 and any(c["kind"] == "duplicate_column" for c in refused.json()["error"]["details"])
+    ref = client.post("/ops/schema/discover", params={"source": "reference"}).json()
+    assert ref["fallback"] and ref["differences_from_reference"] == []
+    ok = client.post("/ops/schema/validate", json={"proposal_id": ref["proposal_id"], "operator": "ann"})
+    assert ok.status_code == 200 and ok.json()["differences_from_reference"] == []
+    p.close()

@@ -72,7 +72,8 @@ class LLMConfig(_Frozen):
     provider: Literal["anthropic", "ollama"] = "ollama"
     model: str = "qwen2.5:7b"
     base_url: str = "http://localhost:11434"            # Ollama only
-    timeout_s: float = Field(60, gt=0)
+    keep_alive: str = "2h"                              # Ollama only: keep the model loaded between calls
+    timeout_s: float = Field(180, gt=0)
     max_tokens: int = Field(150, ge=1)
     # Prices apply to anthropic only; a local Ollama model costs 0 EUR (tokens are still recorded).
     price_eur_per_input_token: float = Field(ge=0)

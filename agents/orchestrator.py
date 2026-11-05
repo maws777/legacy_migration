@@ -240,10 +240,12 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
     # ---------------------------------------------------------------- schema discovery (task 7)
     @app.post("/ops/schema/discover", response_model=SchemaProposal)
-    def discover_schema() -> SchemaProposal:
+    def discover_schema(source: Literal["llm", "reference"] = "llm") -> SchemaProposal:
+        """``source=llm`` (default): proposal by the LLM (reference fallback if unavailable);
+        ``source=reference``: the reference Column_Mapping of Rule_Config, without any LLM call."""
         p = svc().pipeline
         p.ensure_llm()
-        return p.schema_agent.discover()
+        return p.schema_agent.discover(use_llm=source == "llm")
 
     @app.post("/ops/schema/validate", response_model=ColumnMapping)
     def validate_schema(body: ValidateMappingRequest) -> ColumnMapping:

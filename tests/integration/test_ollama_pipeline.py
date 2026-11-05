@@ -31,14 +31,18 @@ SCRIPT = {   # normalized value -> answers per turn (JSON protocol of the Resolv
 
 
 class FakeOllama:
-    def __init__(self, down=False):
-        self.down, self.chats = down, []
+    def __init__(self, down=False, oom=False):
+        self.down, self.oom, self.chats = down, oom, []
 
     def __call__(self, req: httpx.Request):
         if self.down:
             raise httpx.ConnectError("connection refused", request=req)
         if req.url.path == "/api/tags":
             return httpx.Response(200, json=TAGS)
+        if req.url.path == "/api/generate":
+            if self.oom:
+                return httpx.Response(500, json={"error": "llama-server reported out-of-memory during startup"})
+            return httpx.Response(200, json={"model": "qwen2.5:7b", "done": True, "done_reason": "load"})
         body = json.loads(req.content)
         self.chats.append(body)
         try:
@@ -141,5 +145,18 @@ def test_anthropic_without_key_gives_degraded_mode_with_reason(tmp_path):
     try:
         info = p.start_campaign()
         assert "Degraded_Mode: anthropic: ANTHROPIC_API_KEY is not set" in p.reports.build(info.run_id).text
+    finally:
+        p.close()
+
+
+def test_ollama_out_of_memory_message_reaches_the_report(tmp_path):
+    fake = FakeOllama(oom=True)
+    p = make(tmp_path, fake)
+    try:
+        info = p.start_campaign()
+        text = p.reports.build(info.run_id).text
+        assert ("Degraded_Mode: Ollama could not load qwen2.5:7b (HTTP 500: llama-server reported out-of-memory "
+                "during startup); Unknown_Variants were sent to humans.") in text
+        assert fake.chats == []
     finally:
         p.close()

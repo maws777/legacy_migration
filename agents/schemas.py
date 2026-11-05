@@ -19,6 +19,17 @@ class FormatSpec(BaseModel):
 class MappingConflict(BaseModel):
     target_attribute: str
     source_columns: list[str]
+    # "target_count": a required target mapped by zero or several columns;
+    # "duplicate_column": a column given several times in the LLM answer (JSON with duplicate keys).
+    kind: Literal["target_count", "duplicate_column"] = "target_count"
+    message: str = ""
+
+
+class MappingDifference(BaseModel):
+    """One source column whose proposed target differs from the reference Column_Mapping of Rule_Config."""
+    column: str
+    proposed: str | None
+    reference: str | None
 
 
 class SchemaProposal(BaseModel):
@@ -29,12 +40,14 @@ class SchemaProposal(BaseModel):
     conflicts: list[MappingConflict]
     fallback: bool
     created_at: datetime
+    differences_from_reference: list[MappingDifference] = []
 
 
 class ColumnMapping(BaseModel):
     mapping: dict[str, str | None]
     validated_by: str
     validated_at: datetime
+    differences_from_reference: list[MappingDifference] = []
 
     def source_for(self, target_attribute: str) -> str:
         for column, target in self.mapping.items():
