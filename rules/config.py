@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rules.fields import normalized_key
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent / "config"
+DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+OLLAMA_CLOUD_URL = "https://ollama.com"
+_dotenv_loaded = False
 CONFIG_FILES = ("dictionaries.yaml", "mappings.yaml", "column_mapping.yaml", "pipeline.yaml")
 
 
@@ -191,6 +195,50 @@ def _read_yaml(path: Path) -> object:
     return {} if data is None else data
 
 
+def load_dotenv() -> None:
+    """Copy KEY=VALUE lines of the repository ``.env`` into the environment (once; real variables win).
+    Set LEGACY_NO_DOTENV=1 to skip it (the test suite does)."""
+    global _dotenv_loaded
+    if _dotenv_loaded or os.environ.get("LEGACY_NO_DOTENV"):
+        return
+    _dotenv_loaded = True
+    try:
+        text = DOTENV_PATH.read_text(encoding="utf-8-sig")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.removeprefix("export ").strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+def ollama_api_key() -> str | None:
+    load_dotenv()
+    return (os.environ.get("OLLAMA_API_KEY") or "").strip() or None
+
+
+def _llm_with_env(llm: LLMConfig) -> LLMConfig:
+    """Environment overrides for Ollama: OLLAMA_MODEL, OLLAMA_BASE_URL; with OLLAMA_API_KEY set and no
+    base URL given, the Ollama cloud (https://ollama.com) is used."""
+    if llm.provider != "ollama":
+        return llm
+    update: dict[str, str] = {}
+    if model := (os.environ.get("OLLAMA_MODEL") or "").strip():
+        update["model"] = model
+    if url := (os.environ.get("OLLAMA_BASE_URL") or "").strip():
+        update["base_url"] = url
+    elif ollama_api_key():
+        update["base_url"] = OLLAMA_CLOUD_URL
+    return llm.model_copy(update=update) if update else llm
+
+
 def load_rule_config(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> RuleConfig:
     """Read and validate the four Rule_Config files. Raises ConfigError(file, error)."""
     config_dir = Path(config_dir)
@@ -214,10 +262,12 @@ def load_rule_config(config_dir: Path | str = DEFAULT_CONFIG_DIR) -> RuleConfig:
     bad_codes = sorted(v for v in maps.did_map.values() if v not in dico.value_descriptions)
     if bad_codes:
         raise ConfigError("mappings.yaml", f"schema error: did_map targets not in value_descriptions: {bad_codes}")
+    pipeline: PipelineConfig = parsed["pipeline.yaml"]  # type: ignore[assignment]
+    pipeline = pipeline.model_copy(update={"llm": _llm_with_env(pipeline.llm)})
     return RuleConfig(
         dictionaries=dico,
         mappings=maps,
         column_mapping=parsed["column_mapping.yaml"],
-        pipeline=parsed["pipeline.yaml"],
+        pipeline=pipeline,
         config_hash=digest.hexdigest(),
     )

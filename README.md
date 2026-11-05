@@ -31,6 +31,18 @@ Check the installation (about 90 seconds; the `dataset` tests use `data/legacy/h
 
 The LLM is optional. The provider is set in `rules/config/pipeline.yaml` (`llm.provider`, `llm.model`, `llm.base_url`). The default is a local **Ollama** server with the model `qwen2.5:7b`: no key, no network call outside the laptop, cost 0 € (tokens are still counted).
 
+### Ollama cloud (API key)
+
+Put the key in `.env` at the repository root (the file is git-ignored; see `.env.example`):
+
+```
+OLLAMA_API_KEY=...
+OLLAMA_MODEL=gpt-oss:120b      # optional: overrides llm.model of pipeline.yaml
+# OLLAMA_BASE_URL=...          # optional: defaults to https://ollama.com when a key is set
+```
+
+With a key, the client calls `https://ollama.com` with a Bearer header and loads nothing (no `ollama pull`, no `keep_alive`). Without a key, nothing changes (local server). Real environment variables win over `.env`. The model must exist on the cloud (`GET https://ollama.com/api/tags`); otherwise the Run starts in Degraded_Mode with the list of available models.
+
 ### Ollama (default)
 
 1. Install Ollama: `winget install Ollama.Ollama`, or the installer from https://ollama.com/download (Windows, macOS, Linux). On Windows it runs in the background after installation; otherwise start it with `ollama serve`.

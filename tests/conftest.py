@@ -1,9 +1,12 @@
 """Shared pytest configuration: markers, dataset auto-skip and common fixtures."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+os.environ["LEGACY_NO_DOTENV"] = "1"          # the real .env (with a cloud key) must never reach the tests
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "data" / "legacy" / "hackathon-2026-digital-continuity-dataset.csv"
@@ -55,6 +58,8 @@ def _no_real_llm(monkeypatch):
         pass
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name in ("OLLAMA_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(llm_client, "OLLAMA_TRANSPORT", Blocked())
 
 
