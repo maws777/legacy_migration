@@ -26,11 +26,15 @@ from legacy_b.store import LegacyBStore
 SYSTEM = (
     "You are the agent of Legacy B, the system that holds the reference vehicle model of each VIN (fields "
     "CHASSIS_NO, MODELE, DATE_MAJ). A new target system now holds the vehicle diagnostics migrated from Legacy A "
-    "(tables vehicle, diagnostic_operation, diagnozed_ecu, diag_value_result, diag_tools_versions). Write exactly "
-    "3 short questions, in English, that Legacy B needs answered from the target database for its own work: for "
-    "example to compare vehicle models with its records, to find vehicles it does not know, or to get the latest "
-    'diagnostics of its vehicles. Reply with JSON only: {"questions": ["...", "...", "..."]}.'
+    "(tables vehicle, diagnostic_operation, diag_value_result, diag_tools_versions). Write exactly 3 short "
+    "questions, in English, that Legacy B needs answered from the target database for its own work.\n"
+    "The target database does not know Legacy B and cannot read its records: each question must be answerable "
+    "from the target tables alone. When a question is about specific vehicles, write their VINs in the question "
+    "(take them from sample_vins). The first question must start with \"List the VIN and the vehicle model of "
+    "the vehicles\" followed by the sample VINs, so that Legacy B can compare them with its own models.\n"
+    'Reply with JSON only: {"questions": ["...", "...", "..."]}.'
 )
+SAMPLE_VINS = 5
 
 
 def summary(store: LegacyBStore, cfg) -> dict:
@@ -38,13 +42,13 @@ def summary(store: LegacyBStore, cfg) -> dict:
     records = store.records()
     models = Counter(t.vehicle_model for t in (translate(r, cfg) for r in records) if t.vehicle_model)
     return {"records": len(records), "models": dict(models.most_common()),
-            "sample_vins": [r.CHASSIS_NO for r in records[:3]]}
+            "sample_vins": [r.CHASSIS_NO for r in records[:SAMPLE_VINS]]}
 
 
 def fallback_questions(info: dict) -> list[str]:
-    vin = (info.get("sample_vins") or ["?"])[0]
-    return ["How many vehicles are there in the target for each vehicle model?",
-            f"What is the vehicle model of VIN {vin} in the target?",
+    vins = ", ".join(info.get("sample_vins") or ["?"])
+    return [f"List the VIN and the vehicle model of the vehicles {vins}.",
+            "How many vehicles are there in the target for each vehicle model?",
             "Which 5 vehicles have the most recent diagnostic operation, and on which date?"]
 
 
@@ -58,7 +62,8 @@ class LegacyBAsker:
         if self.llm is None or not self.llm.is_available():
             return fallback_questions(info), "fallback: no LLM available", 0
         res = self.llm.complete(run_id="legacy-b", purpose="legacy_b_query", system=SYSTEM,
-                                prompt=json.dumps({"legacy_b_data": info}, ensure_ascii=False), max_tokens=200)
+                                prompt=json.dumps({"legacy_b_data": info}, ensure_ascii=False),
+                                max_tokens=400)          # 200 cut the JSON: three questions with 5 VINs are long
         tokens = res.input_tokens + res.output_tokens
         if not res.ok:
             return fallback_questions(info), f"fallback: LLM failure {res.error_type}", tokens

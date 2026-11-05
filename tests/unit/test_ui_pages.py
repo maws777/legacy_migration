@@ -262,3 +262,47 @@ def test_results_page_shows_a_verdict_and_the_table(pending):
     at = app(api, page="ui/pages/1_Resultats.py").run()
     assert not at.exception
     assert (len(at.warning) == 1) == bool(pending) and (len(at.success) == 1) == (not pending)
+
+
+def test_legacy_b_agent_button_runs_the_agent_as_its_own_process(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+
+    from agents.schemas import ChatResponse
+    from ui import legacy_b_runner
+
+    launched = []
+
+    class Proc:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    proc = Proc()
+
+    def fake_popen(cmd, **kw):
+        launched.append(cmd)
+        kw["stdout"].write("Legacy B agent: 3 questions (llm, 635 tokens)\n")
+        return proc
+
+    class ChatApi(FakeApi):
+        def chat(self, question, timeout_s=300.0):
+            return ChatResponse(sql=None, rows=[], truncated=False, input_tokens=0, output_tokens=0)
+
+    legacy_b_runner.reset()
+    monkeypatch.setattr(legacy_b_runner, "popen", fake_popen)
+    monkeypatch.setattr(legacy_b_runner, "ROOT", tmp_path)
+    monkeypatch.setenv("MIGRATION_VAR_DIR", "var/demo")
+    at = app(ChatApi(), page="ui/pages/5_chat.py").run()
+    button(at, "Lancer l'agent Legacy B").click().run()
+    assert launched[0][:4] == [sys.executable, "-u", "-m", "agents.legacy_b_asker"]
+    assert launched[0][-2:] == ["--var", str(tmp_path / "var/demo")]
+    assert button(at, "Lancer l'agent Legacy B").disabled
+    assert any("Agent Legacy B : en cours" in i.value for i in at.info)
+    assert "3 questions (llm, 635 tokens)" in at.code[-1].value
+    proc.returncode = 0
+    at.run()
+    assert not button(at, "Lancer l'agent Legacy B").disabled and not at.info
+    legacy_b_runner.reset()
+    assert subprocess.Popen is not fake_popen

@@ -14,6 +14,7 @@ import json
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Iterable, Literal, Mapping
 
 from pydantic import BaseModel, Field, ValidationError
@@ -77,7 +78,7 @@ class QuestionAdvice(BaseModel):
     output_tokens: int = 0
     seconds: float = 0.0
     model: str | None = None
-    created_at: Any = None
+    created_at: datetime | None = None          # parsed from the ISO string of the JSON (the UI formats it)
 
 
 @dataclass
