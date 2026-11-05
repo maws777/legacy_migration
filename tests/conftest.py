@@ -58,7 +58,7 @@ def _no_real_llm(monkeypatch):
         pass
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    for name in ("OLLAMA_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL"):
+    for name in ("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_THINK", "OLLAMA_REASONING_TOKENS"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(llm_client, "OLLAMA_TRANSPORT", Blocked())
 

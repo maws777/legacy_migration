@@ -3,9 +3,8 @@
 Providers (Rule_Config ``llm.provider``):
 
 - ``ollama`` (default): HTTP API, ``POST {base_url}/api/chat`` with ``"format": "json"``; tokens
-  from ``prompt_eval_count`` and ``eval_count``; cost 0 EUR. Local by default. With ``OLLAMA_API_KEY`` set
-  (environment or ``.env``) it talks to the Ollama cloud (``https://ollama.com``, Bearer key); the model
-  comes from ``OLLAMA_MODEL`` or Rule_Config ``llm.model``; ``OLLAMA_BASE_URL`` overrides the URL.
+  from ``prompt_eval_count`` and ``eval_count``; cost 0 EUR. Local server; the model comes from
+  ``OLLAMA_MODEL`` (environment or ``.env``) or Rule_Config ``llm.model``; ``OLLAMA_BASE_URL`` overrides the URL.
 - ``anthropic``: ``anthropic.Anthropic().messages.create``; key read from ``ANTHROPIC_API_KEY`` at each
   call and never written anywhere.
 
@@ -22,7 +21,7 @@ from typing import Any, Callable, Literal
 import httpx
 from sqlalchemy import Column, DateTime, Engine, Integer, MetaData, String, Table, func, insert, select
 
-from rules.config import LLMConfig, ollama_api_key
+from rules.config import LLMConfig
 from rules.timeutil import naive_utc, utcnow
 
 LLMErrorType = Literal["missing_key", "timeout", "provider_error"]
@@ -156,20 +155,16 @@ def ollama_error(r: httpx.Response) -> str:
 
 
 class OllamaProvider:
-    """Ollama server, local or cloud: ``/api/chat`` with a forced JSON answer, no streaming, temperature 0.
+    """Local Ollama server: ``/api/chat`` with a forced JSON answer, no streaming, temperature 0.
 
-    Local: every request carries ``keep_alive`` so the model stays loaded between calls.
-    Cloud (OLLAMA_API_KEY set): Bearer key, no model loading (nothing to pull or keep alive).
+    Every request carries ``keep_alive`` so the model stays loaded between calls.
     """
 
     name = "ollama"
 
     def __init__(self, cfg: LLMConfig, http: httpx.Client | None = None) -> None:
         self.cfg = cfg
-        self.api_key = ollama_api_key()
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        self.http = http or httpx.Client(base_url=cfg.base_url, timeout=cfg.timeout_s, transport=OLLAMA_TRANSPORT,
-                                         headers=headers)
+        self.http = http or httpx.Client(base_url=cfg.base_url, timeout=cfg.timeout_s, transport=OLLAMA_TRANSPORT)
 
     def availability(self) -> tuple[bool, str | None]:
         """Server reachable, model pulled, and model loaded in memory (the load fails on lack of memory)."""
@@ -178,8 +173,6 @@ class OllamaProvider:
             r = self.http.get("/api/tags", timeout=min(AVAILABILITY_TIMEOUT_S, self.cfg.timeout_s))
         except httpx.HTTPError as exc:
             return False, f"{where} ({type(exc).__name__})"
-        if r.status_code in (401, 403) and self.api_key:
-            return False, f"Ollama cloud refused OLLAMA_API_KEY ({ollama_error(r)})"
         if r.status_code != 200:
             return False, f"{where} ({ollama_error(r)})"
         try:
@@ -188,11 +181,7 @@ class OllamaProvider:
             return False, f"{where} (invalid /api/tags answer)"
         model = self.cfg.model
         if model not in names and f"{model}:latest" not in names:
-            if self.api_key:
-                return False, f"Ollama cloud has no model {model} (set OLLAMA_MODEL to one of: {sorted(names)[:8]})"
             return False, f"Ollama model {model} is not pulled (run: ollama pull {model})"
-        if self.api_key:
-            return True, None                            # cloud: nothing to load
         # A generate request without a prompt only loads the model (no-op when it is already loaded).
         try:
             r = self.http.post("/api/generate", json={"model": model, "keep_alive": self.cfg.keep_alive})
@@ -207,9 +196,10 @@ class OllamaProvider:
     def call(self, system: str, prompt: str, max_tokens: int) -> tuple[str, int, int, str]:
         body = {"model": self.cfg.model, "stream": False, "format": "json",
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                "options": {"temperature": 0, "num_predict": max_tokens}}
-        if not self.api_key:
-            body["keep_alive"] = self.cfg.keep_alive
+                "options": {"temperature": 0, "num_predict": max_tokens + self.cfg.reasoning_tokens}}
+        if self.cfg.think is not None:
+            body["think"] = self.cfg.think
+        body["keep_alive"] = self.cfg.keep_alive
         try:
             r = self.http.post("/api/chat", json=body)
         except httpx.TimeoutException as exc:

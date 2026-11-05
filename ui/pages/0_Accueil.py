@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
-from agents.schemas import SchemaProposal  # noqa: E402
+from ui.mapping import mapping_step  # noqa: E402
 from ui.common import (  # noqa: E402
     act, active_jobs, auto_refresh, client, finished, hero, launch, link, load, running, setup, show_failure, show_running,
 )
@@ -40,7 +40,6 @@ cards = "".join(
 st.markdown(f'<div class="steps">{cards}</div>', unsafe_allow_html=True)
 
 pipeline_job = running(jobs, "campaign") or running(jobs, "resume")
-schema_job = running(jobs, "schema_discover")
 
 
 # ---------------------------------------------------------------- step panels
@@ -49,39 +48,7 @@ def mapping_table(columns: dict) -> list[dict]:
 
 
 def panel_schema() -> None:
-    st.markdown("### Étape 1 · Comprendre le fichier")
-    st.write("Avant de migrer, l'outil doit savoir à quoi correspond chaque colonne du fichier source. "
-             "Il propose une correspondance, **vous la relisez et la validez**.")
-    if schema_job is not None:
-        show_running(schema_job)
-    c1, c2 = st.columns(2)
-    if c1.button("✨ Analyser le fichier avec l'IA", type="primary", disabled=schema_job is not None,
-                 help="L'IA lit l'en-tête et quelques lignes. Peut prendre une minute."):
-        launch("schema", lambda: api.schema_discover_job("llm"))
-    if c2.button("Utiliser la correspondance de référence", disabled=schema_job is not None,
-                 help="Correspondance prédéfinie, sans IA. Instantané."):
-        launch("schema", lambda: api.schema_discover_job("reference"))
-    done = finished("schema")
-    if done is None:
-        return
-    if done.status != "succeeded":
-        show_failure(done)
-        return
-    proposal = SchemaProposal(**done.result)
-    st.markdown("**Proposition à relire**")
-    if proposal.fallback:
-        st.info("L'IA n'était pas disponible : voici la correspondance de référence.")
-    st.dataframe(mapping_table(proposal.column_mapping), hide_index=True, width="stretch")
-    for d in proposal.differences_from_reference:
-        st.warning(f"Différence avec la référence pour « {d.column} » : proposé {d.proposed or 'aucun'}, "
-                   f"attendu {d.reference or 'aucun'}.")
-    for conflict in proposal.conflicts:
-        st.error(f"Conflit sur « {conflict.target_attribute} » : {', '.join(conflict.source_columns)}. "
-                 f"{conflict.message}")
-    if st.button("✅ Je valide cette correspondance", type="primary", disabled=bool(proposal.conflicts)):
-        if act(lambda: api.validate_schema(proposal.proposal_id, op)) is not None:
-            st.session_state.get("_finished", {}).pop("schema", None)
-            st.rerun()
+    mapping_step(api, op, jobs)
 
 
 def panel_migrate() -> None:

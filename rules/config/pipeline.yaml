@@ -3,7 +3,7 @@ confidence_threshold: 0.9
 batch_size: 1000
 legacy_b_lookup: true
 hitl_example_rows: 5
-discovery_sample_size: 20
+discovery_sample_size: 20  # rows per window; schema discovery profiles up to 5 evenly spaced windows
 # Fields whose LLM proposals may be applied automatically at or above the threshold
 # (closed dictionaries only, decisions.md). Other fields always go to a human.
 resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
@@ -18,7 +18,7 @@ llm:
 # Ollama cloud: set OLLAMA_API_KEY in .env (base_url becomes https://ollama.com) and pick the model with
 # OLLAMA_MODEL in .env (it overrides `model` below; OLLAMA_BASE_URL overrides `base_url`).
   provider: ollama
-  model: qwen2.5:7b
+  model: qwen3.5:4b
   base_url: http://localhost:11434      # Ollama only
   keep_alive: 2h                        # Ollama only: keep the model loaded between calls
   timeout_s: 180                        # loading qwen2.5:7b partly on CPU took 80 s on the first call

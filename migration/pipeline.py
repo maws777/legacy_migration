@@ -1,6 +1,7 @@
 """MigrationPipeline: builds the dependencies and drives the Run_Workflow."""
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from pathlib import Path
@@ -29,6 +30,14 @@ from target.repository import TargetRepository
 from target.schema import create_target_schema, make_engine, sqlite_url
 
 ROW_OUTCOMES = ("MIGRATE", "CORRECT", "REJECT", "ASK_HUMAN")
+
+
+def _max_concurrency() -> int:
+    # Parallel LLM resolutions (cloud models are slow per call); 1 keeps the sequential order.
+    try:
+        return max(1, int(os.environ.get("LEGACY_MAX_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
 
 
 class CampaignNotPaused(Exception):
@@ -75,7 +84,7 @@ class MigrationPipeline:
         self.graph = build_run_graph(self.deps, self.checkpointer)
 
     def _config(self, thread_id: str) -> dict:
-        return {"configurable": {"thread_id": thread_id}, "max_concurrency": 1,
+        return {"configurable": {"thread_id": thread_id}, "max_concurrency": _max_concurrency(),
                 "recursion_limit": RECURSION_LIMIT}
 
     def _invoke(self, payload, campaign_id: str) -> RunInfo:

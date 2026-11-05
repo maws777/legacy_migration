@@ -9,7 +9,8 @@ from ui.api_client import ApiCallError
 from ui.common import act, finished, launch, load, running, show_failure, show_running
 
 NONE = "(aucun)"
-SAME, DIFF = "background-color: #e3f4e3", "background-color: #fbe0dc; font-weight: bold"
+SAME = "background-color: #e3f4e3; color: #173b1b"
+DIFF = "background-color: #fbe0dc; color: #5a1712; font-weight: bold"
 
 
 def _proposal(api) -> SchemaProposal | None:
@@ -20,12 +21,7 @@ def _proposal(api) -> SchemaProposal | None:
 
 
 def _table(p: SchemaProposal, reference: dict) -> None:
-    rows = [{"Colonne source": c, "Attribut cible proposé": t or NONE,
-             "Mapping de référence": reference.get(c) or NONE, "Écart": "oui" if t != reference.get(c) else ""}
-            for c, t in p.column_mapping.items()]
-    df = pd.DataFrame(rows)
-    styled = df.style.apply(lambda r: [DIFF if r["Écart"] else SAME] * len(r), axis=1)
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(_styled_table(p, reference), width="stretch", hide_index=True)
     if p.differences_from_reference:
         st.markdown(f"**{len(p.differences_from_reference)} différence(s) avec le mapping de référence** "
                     "(lignes en rouge) :")
@@ -33,6 +29,14 @@ def _table(p: SchemaProposal, reference: dict) -> None:
             st.markdown(f"- `{d.column}` : proposé :red[{d.proposed or NONE}], référence :green[{d.reference or NONE}]")
     else:
         st.markdown(":green[Aucune différence avec le mapping de référence.]")
+
+
+def _styled_table(p: SchemaProposal, reference: dict):
+    rows = [{"Colonne source": c, "Attribut cible proposé": t or NONE,
+             "Mapping de référence": reference.get(c) or NONE, "Écart": "oui" if t != reference.get(c) else ""}
+            for c, t in p.column_mapping.items()]
+    df = pd.DataFrame(rows)
+    return df.style.apply(lambda r: [DIFF if r["Écart"] else SAME] * len(r), axis=1)
 
 
 def mapping_step(api, op: str, jobs: list):
@@ -60,7 +64,7 @@ def mapping_step(api, op: str, jobs: list):
     c1, c2 = st.columns(2)
     if c1.button("Proposer le mapping avec l'IA", disabled=job is not None):
         launch("schema", lambda: api.schema_discover_job("llm"))
-    if c2.button("Utiliser le mapping de référence", disabled=job is not None):
+    if c2.button("Utiliser la correspondance de référence", disabled=job is not None):
         ref = act(lambda: api.schema_discover("reference"))
         if ref is not None:
             st.session_state["_proposal"] = ref

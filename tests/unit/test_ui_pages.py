@@ -8,6 +8,7 @@ from streamlit.testing.v1 import AppTest
 
 from agents.jobs import Job
 from agents.schemas import ColumnMapping, PhaseStatus, SchemaProposal
+from ui.mapping import _styled_table
 
 ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc)
@@ -83,9 +84,26 @@ class FakeApi:
         self.active = [j]
         return j
 
+    def schema_discover(self, source="reference"):
+        return proposal(dict(REFERENCE), fallback=source == "reference")
+
+    def latest_proposal(self):
+        return None
+
+    def schema_reference(self):
+        return SimpleNamespace(targets=TARGETS, mapping=REFERENCE)
+
+    def validated_mapping(self):
+        return self.mapping
+
     def validate_schema(self, proposal_id, operator):
         self.validated.append((proposal_id, operator))
         self.mapping = ColumnMapping(mapping={"VIN": "vin"}, validated_by=operator, validated_at=NOW)
+        return self.mapping
+
+    def validate_mapping(self, proposal_id, operator, mapping=None):
+        self.validated.append((proposal_id, operator, mapping))
+        self.mapping = ColumnMapping(mapping=mapping or {}, validated_by=operator, validated_at=NOW)
         return self.mapping
 
     def jobs(self, active=None, kind=None):
@@ -164,11 +182,20 @@ def test_finished_job_result_is_shown():
 def test_without_a_validated_mapping_the_first_step_is_the_schema_and_it_can_be_validated():
     api = FakeApi(mapping=None)
     at = app(api, operator="ann").run()
-    assert any("tape 1" in m.value for m in at.markdown)
+    assert any("mapping des colonnes" in h.value.lower() for h in at.subheader)
     button(at, "Utiliser la correspondance").click().run()
-    button(at, "valide cette").click().run()
-    assert api.validated == [("p1", "ann")]
+    at.session_state["map_p1_originTool"] = "Label"
+    at.run()
+    button(at, "Valider le mapping").click().run()
+    assert api.validated == [("p1", "ann", {"originTool": "Label", "VIN": "Vehicle.VIN"})]
     assert any("tape 2" in m.value for m in at.markdown)
+
+
+def test_schema_proposal_table_sets_readable_text_colors_for_both_row_states():
+    p = proposal({"originTool": "DiagToolsVersions.DiagToolName", "VIN": "Label"})
+    rendered = _styled_table(p, REFERENCE).to_html()
+    assert "background-color: #e3f4e3" in rendered and "color: #173b1b" in rendered
+    assert "background-color: #fbe0dc" in rendered and "color: #5a1712" in rendered
 
 
 def test_every_page_renders_without_error():

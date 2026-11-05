@@ -12,7 +12,8 @@ from rules.config import CONFIG_FILES, DEFAULT_CONFIG_DIR, load_rule_config
 
 pytestmark = pytest.mark.integration
 EDGE = Path(__file__).resolve().parents[2] / "data" / "synthetic_edge_cases.csv"
-TAGS = {"models": [{"name": "qwen2.5:7b", "model": "qwen2.5:7b"}]}
+MODEL = load_rule_config().pipeline.llm.model
+TAGS = {"models": [{"name": MODEL, "model": MODEL}]}
 
 
 def final(value, confidence, why="closest allowed value"):
@@ -42,7 +43,7 @@ class FakeOllama:
         if req.url.path == "/api/generate":
             if self.oom:
                 return httpx.Response(500, json={"error": "llama-server reported out-of-memory during startup"})
-            return httpx.Response(200, json={"model": "qwen2.5:7b", "done": True, "done_reason": "load"})
+            return httpx.Response(200, json={"model": MODEL, "done": True, "done_reason": "load"})
         body = json.loads(req.content)
         self.chats.append(body)
         try:
@@ -111,7 +112,7 @@ def test_agent_with_simulated_ollama(tmp_path):
         cloud = 650 * 0.00000092 + 130 * 0.0000046
         assert report.cloud_equivalent_cost_eur == pytest.approx(cloud)
         assert (f"Cloud-equivalent cost (anthropic claude-haiku-4-5 prices): {cloud:.4f} € (real cost 0.0000 € "
-                "with ollama qwen2.5:7b)") in report.text
+                f"with ollama {p.deps.llm.cfg.model})") in report.text
     finally:
         p.close()
 
@@ -161,7 +162,8 @@ def test_ollama_out_of_memory_message_reaches_the_report(tmp_path):
     try:
         info = p.start_campaign()
         text = p.reports.build(info.run_id).text
-        assert ("Degraded_Mode: Ollama could not load qwen2.5:7b (HTTP 500: llama-server reported out-of-memory "
+        assert (f"Degraded_Mode: Ollama could not load {p.deps.llm.cfg.model} "
+                "(HTTP 500: llama-server reported out-of-memory "
                 "during startup); Unknown_Variants were sent to humans.") in text
         assert fake.chats == []
     finally:

@@ -31,17 +31,19 @@ Check the installation (about 90 seconds; the `dataset` tests use `data/legacy/h
 
 The LLM is optional. The provider is set in `rules/config/pipeline.yaml` (`llm.provider`, `llm.model`, `llm.base_url`). The default is a local **Ollama** server with the model `qwen2.5:7b`: no key, no network call outside the laptop, cost 0 € (tokens are still counted).
 
-### Ollama cloud (API key)
+### Choosing the local model (`.env`)
 
-Put the key in `.env` at the repository root (the file is git-ignored; see `.env.example`):
+The model is read from `.env` at the repository root (git-ignored; see `.env.example`). Real environment variables win over `.env`.
 
 ```
-OLLAMA_API_KEY=...
-OLLAMA_MODEL=gpt-oss:120b      # optional: overrides llm.model of pipeline.yaml
-# OLLAMA_BASE_URL=...          # optional: defaults to https://ollama.com when a key is set
+OLLAMA_MODEL=qwen3.5:9b          # overrides llm.model of pipeline.yaml (run `ollama pull <model>` first)
+OLLAMA_THINK=false               # reasoning models (qwen3...): false = no reasoning, much faster
+# OLLAMA_BASE_URL=http://localhost:11434
+# OLLAMA_REASONING_TOKENS=0      # extra output tokens if you keep reasoning on (it counts in the limit)
+# LEGACY_MAX_CONCURRENCY=1       # parallel LLM resolutions per run
 ```
 
-With a key, the client calls `https://ollama.com` with a Bearer header and loads nothing (no `ollama pull`, no `keep_alive`). Without a key, nothing changes (local server). Real environment variables win over `.env`. The model must exist on the cloud (`GET https://ollama.com/api/tags`); otherwise the Run starts in Degraded_Mode with the list of available models.
+With `OLLAMA_THINK` unset, a reasoning model may spend its whole token limit thinking and return an empty answer; schema discovery then falls back to the reference mapping.
 
 ### Ollama (default)
 
@@ -102,7 +104,7 @@ A Run processes zero rows until a Column_Mapping is validated (Requirement 23.6)
 .venv\Scripts\python.exe -m migration schema --operator <your-name> --no-llm    # reference mapping, no LLM
 ```
 
-Expected: the 10 source columns with their target attributes, the differences from the reference mapping column by column, then `Column_Mapping validated by <your-name>`. If the LLM proposal maps a target attribute to zero or two columns, or repeats a column, the command lists the conflicts, validates nothing and exits with code 1; run it again with `--no-llm` to validate the reference mapping. With `qwen2.5:7b` this is the normal case: its proposal on the dataset was wrong and was refused (see `docs/lessons-learnt.md`). With the services running, the same step is `POST /ops/schema/discover` (`?source=reference` for the reference mapping) then `POST /ops/schema/validate` (see `docs/demo.md`).
+Expected: the 10 source columns with their target attributes, the differences from the reference mapping column by column, then `Column_Mapping validated by <your-name>`. If the LLM proposal maps a target attribute to zero or two columns, or repeats a column, the command lists the conflicts, validates nothing and exits with code 1; run it again with `--no-llm` to validate the reference mapping. The proposal is only a suggestion: compare its differences with the reference and validate the mapping before migration. On the Home page, each source column can be corrected individually before validation. Schema discovery gives the LLM a compact profile (observed text type, distinct count and representative examples) from up to five evenly spaced source windows, plus known reference hints and short target-field definitions.
 
 ## Run
 

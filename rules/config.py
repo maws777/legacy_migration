@@ -13,7 +13,6 @@ from rules.fields import normalized_key
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent / "config"
 DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
-OLLAMA_CLOUD_URL = "https://ollama.com"
 _dotenv_loaded = False
 CONFIG_FILES = ("dictionaries.yaml", "mappings.yaml", "column_mapping.yaml", "pipeline.yaml")
 
@@ -78,6 +77,11 @@ class LLMConfig(_Frozen):
     base_url: str = "http://localhost:11434"            # Ollama only
     keep_alive: str = "2h"                              # Ollama only: keep the model loaded between calls
     timeout_s: float = Field(180, gt=0)
+    # Extra tokens allowed on top of max_tokens for the hidden reasoning of "thinking" models (their reasoning
+    # counts in num_predict: without headroom the answer comes back empty). Ollama only.
+    reasoning_tokens: int = Field(0, ge=0)
+    # Ollama `think` flag for reasoning models (qwen3, ...): false turns the reasoning off. None = model default.
+    think: bool | None = None
     max_tokens: int = Field(150, ge=1)
     # Anthropic API prices: the real cost with provider anthropic, and the cloud-equivalent cost of any
     # provider (a local Ollama model costs 0 EUR; its tokens are still recorded and priced as if on the cloud).
@@ -219,23 +223,22 @@ def load_dotenv() -> None:
             os.environ.setdefault(key, value)
 
 
-def ollama_api_key() -> str | None:
-    load_dotenv()
-    return (os.environ.get("OLLAMA_API_KEY") or "").strip() or None
-
-
 def _llm_with_env(llm: LLMConfig) -> LLMConfig:
-    """Environment overrides for Ollama: OLLAMA_MODEL, OLLAMA_BASE_URL; with OLLAMA_API_KEY set and no
-    base URL given, the Ollama cloud (https://ollama.com) is used."""
+    """Environment overrides for Ollama: OLLAMA_MODEL, OLLAMA_BASE_URL, OLLAMA_THINK, OLLAMA_REASONING_TOKENS (local server)."""
     if llm.provider != "ollama":
         return llm
+    load_dotenv()
     update: dict[str, str] = {}
     if model := (os.environ.get("OLLAMA_MODEL") or "").strip():
         update["model"] = model
     if url := (os.environ.get("OLLAMA_BASE_URL") or "").strip():
         update["base_url"] = url
-    elif ollama_api_key():
-        update["base_url"] = OLLAMA_CLOUD_URL
+    think = (os.environ.get("OLLAMA_THINK") or "").strip().lower()
+    if think in ("true", "1", "false", "0"):
+        update["think"] = think in ("true", "1")
+    reasoning = (os.environ.get("OLLAMA_REASONING_TOKENS") or "").strip()
+    if reasoning.isdigit():
+        return llm.model_copy(update={**update, "reasoning_tokens": int(reasoning)})
     return llm.model_copy(update=update) if update else llm
 
 

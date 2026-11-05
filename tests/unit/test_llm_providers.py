@@ -4,6 +4,7 @@ import shutil
 
 import httpx
 import pytest
+import yaml
 
 from agents.llm_client import LLMClient, NoLLM
 from rules.config import CONFIG_FILES, DEFAULT_CONFIG_DIR, ConfigError, LLMConfig, load_rule_config
@@ -34,7 +35,8 @@ def chat_ok(seen, loads=None):
 
 def test_config_defaults_and_validation(tmp_path):
     llm = load_rule_config().pipeline.llm
-    assert (llm.provider, llm.model, llm.base_url) == ("ollama", "qwen2.5:7b", "http://localhost:11434")
+    pipeline = yaml.safe_load((DEFAULT_CONFIG_DIR / "pipeline.yaml").read_text(encoding="utf-8"))
+    assert (llm.provider, llm.model, llm.base_url) == ("ollama", pipeline["llm"]["model"], "http://localhost:11434")
     assert llm.price_per_token() == (0.0, 0.0)
     assert llm.model_copy(update={"provider": "anthropic"}).price_per_token() == (0.00000092, 0.0000046)
     for name in CONFIG_FILES:

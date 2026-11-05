@@ -129,15 +129,20 @@ def _discovery_answer(mapping: dict) -> str:
                        {"name": "Format_2", "ecuCode_pattern": "^Id[0-9]{3}$"}], "format_criterion": "ecuCode"})
 
 
-def test_discovery_sends_header_and_first_n_rows(tmp_path, cfg):
+def test_discovery_sends_a_stratified_column_profile_and_business_dictionary(tmp_path, cfg):
     src = write_csv(tmp_path / "s.csv", [base_row(i) for i in range(1, 31)])
     good = dict(cfg.column_mapping.mapping)
     llm = FakeLLM(lambda body: _discovery_answer(good))
     p = MigrationPipeline(src, var_dir=tmp_path / "v", llm=llm)
     prop = p.schema_agent.discover()
     prompt = llm.calls[0]["prompt"]
-    assert llm.calls[0]["purpose"] == "schema_discovery" and ";".join(HEADER) in prompt
-    assert base_row(20)["VIN"] in prompt and base_row(21)["VIN"] not in prompt
+    assert llm.calls[0]["purpose"] == "schema_discovery"
+    assert all(f'"source_column": "{column}"' in prompt for column in HEADER)
+    assert base_row(20)["VIN"] in prompt and base_row(30)["VIN"] in prompt
+    assert '"observed_type": "text or identifier"' in prompt
+    assert '"reference_target_hint": "Vehicle.VIN"' in prompt
+    assert '"known_business_meaning": "unique vehicle identification number"' in prompt
+    assert '"distinct_sample_values": 30' in prompt
     assert not prop.fallback and prop.conflicts == [] and set(prop.column_mapping) == set(HEADER)
     assert p.schema_agent.validate(prop.proposal_id, "ann").mapping["diagnosticFieId"] == \
         "DiagnosticOperation.diagnosticOpID"
