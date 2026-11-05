@@ -56,4 +56,4 @@ if st.button("Reconcile the Control_Sample"):
         st.write(r.model_dump(mode="json"))
 st.subheader("Transition log")
 st.dataframe([e.model_dump(mode="json") for e in (load("transitions", api.transitions) or [])],
-             use_container_width=True)
+             width="stretch")

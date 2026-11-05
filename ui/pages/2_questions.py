@@ -30,7 +30,7 @@ for q in questions:
         else:
             st.markdown(f"**LLM:** {q.llm_status}")
         st.dataframe([{"source_row_id": e.source_row_id, **e.values} for e in q.example_rows],
-                     use_container_width=True)
+                     width="stretch")
         with st.form(f"form_{q.question_id}"):
             option = st.radio("Option", q.options, format_func=LABELS.get, key=f"opt_{q.question_id}")
             value = None

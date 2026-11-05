@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from agents.jobs import Job
 from agents.schemas import PhaseStatus, ReconResult, TransitionLogEntry, TransitionResult
 from hitl.schemas import AnswerResult, HumanQuestion
 from reporting.schemas import DecisionPage, RunInfo, RunMetrics, RunReport, ToolCallRecord
@@ -40,6 +41,26 @@ class OrchestratorClient:
         return r.json()
 
     # ---------------------------------------------------------------- runs
+    # ---------------------------------------------------------------- background jobs
+    def start_campaign_job(self, operator: str | None) -> Job:
+        return Job(**self._call("start campaign", "POST", "/ops/jobs/campaign", ok=(202,), json={"operator": operator}))
+
+    def resume_job(self, campaign_id: str, operator: str) -> Job:
+        return Job(**self._call("resume campaign", "POST", f"/ops/jobs/resume/{campaign_id}", ok=(202,),
+                                json={"operator": operator}))
+
+    def schema_discover_job(self, source: str = "llm") -> Job:
+        return Job(**self._call("propose the mapping", "POST", "/ops/jobs/schema-discover", ok=(202,),
+                                params={"source": source}))
+
+    def job(self, job_id: str) -> Job:
+        return Job(**self._call("load job", "GET", f"/ops/jobs/{job_id}"))
+
+    def jobs(self, active: bool | None = None, kind: str | None = None) -> list[Job]:
+        params = {k: v for k, v in (("active", active), ("kind", kind)) if v is not None}
+        return [Job(**j) for j in self._call("list jobs", "GET", "/ops/jobs", params=params)]
+
+    # ---------------------------------------------------------------- runs (synchronous routes)
     def start_campaign(self, operator: str | None) -> RunInfo:
         return RunInfo(**self._call("start campaign", "POST", "/ops/campaigns", ok=(202,), json={"operator": operator}))
 

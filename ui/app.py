@@ -8,7 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st  # noqa: E402
 
-from ui.common import act, client, load, operator  # noqa: E402
+from ui.common import (  # noqa: E402
+    active_jobs, auto_refresh, client, finished, launch, load, operator, running, show_failure, show_running,
+)
 
 st.set_page_config(page_title="Migration engine", layout="wide")
 st.title("Legacy A -> target migration")
@@ -16,25 +18,37 @@ st.caption("Strangler Fig migration with rules first, LLM on distinct patterns, 
 
 op = operator()
 api = client()
+jobs = active_jobs()
 runs = load("runs", api.runs) or []
 phase = load("phase_home", api.phase)
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Current phase", phase.current_phase if phase else "?")
 c2.metric("Runs", len(runs))
-c3.metric("Open questions", sum(1 for _ in (load("q_home", api.questions) or [])))
+c3.metric("Open questions", len(load("q_home", api.questions) or []))
 
+# ---------------------------------------------------------------- campaigns
 st.subheader("Campaigns")
-if st.button("Start a campaign (Run 1)"):
-    info = act(lambda: api.start_campaign(op))
-    if info:
-        st.success(f"Run {info.run_id} {info.status}; campaign {info.campaign_status}")
+pipeline_job = running(jobs, "campaign") or running(jobs, "resume")
+if pipeline_job is not None:
+    show_running(pipeline_job)
+for slot in ("campaign", "resume"):
+    done = finished(slot)
+    if done is not None:
+        if done.status == "succeeded":
+            r = done.result
+            st.success(f"{done.label} done in {done.seconds:g} s: Run {r['run_id']} {r['status']}, campaign "
+                       f"{r['campaign_status']}, {r['open_questions']} open question(s).")
+        else:
+            show_failure(done)
+
+if st.button("Start a campaign (Run 1)", disabled=pipeline_job is not None):
+    launch("campaign", lambda: api.start_campaign_job(op))
 paused = sorted({r.campaign_id for r in runs if r.campaign_status == "paused"})
 if paused:
     cid = st.selectbox("Paused campaign", paused)
-    if st.button("Resume after human answers (next Run)"):
-        info = act(lambda: api.resume(cid, op))
-        if info:
-            st.success(f"Run {info.run_id} {info.status}; {info.open_questions} open question(s)")
-st.dataframe([r.model_dump(mode="json") for r in runs], use_container_width=True)
+    if st.button("Resume after human answers (next Run)", disabled=pipeline_job is not None):
+        launch("resume", lambda: api.resume_job(cid, op))
+st.dataframe([r.model_dump(mode="json") for r in runs], width="stretch")
 st.info("Pages: Stats, Questions, Decision log, Phases (left sidebar).")
+auto_refresh(jobs)

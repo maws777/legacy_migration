@@ -31,7 +31,7 @@ if page is not None:
         st.info("No Decision_Record matches these filters.")
     else:
         st.caption(f"{page.total:,} matching record(s), first {len(page.items)} shown")
-        st.dataframe([r.model_dump(mode="json") for r in page.items], use_container_width=True)
+        st.dataframe([r.model_dump(mode="json") for r in page.items], width="stretch")
 st.subheader("One source row")
 sel = st.number_input("Source_Row_Id", min_value=1, step=1, value=int(row) if row.strip().isdigit() else 1)
 detail = load("log_row", lambda: api.decisions(run_id, source_row=int(sel), limit=1000))
@@ -46,4 +46,4 @@ if calls is not None:
     if not calls:
         st.info("No tool call in this Run (no Unknown_Variant sent to the agent, or Degraded_Mode).")
     else:
-        st.dataframe([c.model_dump(mode="json") for c in calls], use_container_width=True)
+        st.dataframe([c.model_dump(mode="json") for c in calls], width="stretch")

@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from agents.jobs import Job, JobConflict, JobManager
 from agents.schemas import (
     ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
     SchemaProposal, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
@@ -45,6 +46,7 @@ class Services:
     target: httpx.Client | None = None              # client of the Target_API
     expected: Any = None                            # migration.expected.ExpectedRecordBuilder
     reconciler: Any = None                          # migration.reconciliation.Reconciler
+    jobs: JobManager = field(default_factory=JobManager)   # background jobs of the long operations
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -263,6 +265,55 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
         if m is None:
             raise ApiError(404, "NOT_FOUND", "no validated Column_Mapping")
         return m
+
+    # ---------------------------------------------------------------- background jobs
+    def submit(kind: str, key: str, lane: str, fn: Callable[[], Any], label: str, operator: str | None) -> Job:
+        try:
+            return svc().jobs.submit(kind, key, lane, fn, label=label, operator=operator)
+        except JobConflict as exc:
+            raise ApiError(409, "CONFLICT", str(exc), {"job": exc.job.model_dump(mode="json")}) from None
+
+    @app.post("/ops/jobs/campaign", status_code=202, response_model=Job)
+    def job_campaign(body: StartRunRequest | None = None) -> Job:
+        """Start a campaign in the background; poll ``GET /ops/jobs/{job_id}`` (result: RunInfo)."""
+        operator = (body or StartRunRequest()).operator
+        p = svc().pipeline
+        return submit("campaign", "campaign", "pipeline", lambda: p.start_campaign(operator),
+                      "start campaign", operator)
+
+    @app.post("/ops/jobs/resume/{campaign_id}", status_code=202, response_model=Job)
+    def job_resume(campaign_id: str, body: OperatorBody) -> Job:
+        from migration.pipeline import CampaignNotPaused
+        p = svc().pipeline
+        if p.runs.campaign_status(campaign_id) != "paused":
+            raise ApiError(409, "CONFLICT", str(CampaignNotPaused(campaign_id)))
+
+        def run():
+            try:
+                return p.resume(campaign_id, body.operator)
+            except CampaignNotPaused as exc:
+                raise ApiError(409, "CONFLICT", str(exc)) from None
+
+        return submit("resume", f"resume:{campaign_id}", "pipeline", run, "resume campaign", body.operator)
+
+    @app.post("/ops/jobs/schema-discover", status_code=202, response_model=Job)
+    def job_schema_discover(source: Literal["llm", "reference"] = "llm") -> Job:
+        """Schema discovery in the background (result: SchemaProposal)."""
+        p = svc().pipeline
+        p.ensure_llm()
+        return submit("schema_discover", "schema_discover", "llm",
+                      lambda: p.schema_agent.discover(use_llm=source == "llm"), "schema discovery", None)
+
+    @app.get("/ops/jobs", response_model=list[Job])
+    def list_jobs(active: bool | None = None, kind: str | None = None) -> list[Job]:
+        return svc().jobs.list(active, kind)
+
+    @app.get("/ops/jobs/{job_id}", response_model=Job)
+    def get_job(job_id: str) -> Job:
+        job = svc().jobs.get(job_id)
+        if job is None:
+            raise ApiError(404, "NOT_FOUND", f"unknown job {job_id} (jobs are kept in memory)")
+        return job
 
     # ---------------------------------------------------------------- client routes (task 9)
     def unavailable(backend: str, why: str) -> ApiError:
