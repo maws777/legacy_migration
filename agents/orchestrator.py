@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from agents.jobs import Job, JobConflict, JobManager
+from agents.question_advisor import AdviceToolCall, AdvisorContext, QuestionAdvice, QuestionAdvisor
 from agents.schemas import (
     ColumnMapping, DiagnosticsResponse, ModelReference, OperatorRequest, PhaseStatus, ReconResult, RollbackRequest,
     SchemaProposal, SchemaReference, TransitionLogEntry, TransitionRequest, TransitionResult, ValidateMappingRequest,
@@ -240,6 +241,29 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
         except ValueRejected as exc:
             raise ApiError(422, "VALIDATION_ERROR", exc.failed_rule, {"failed_rule": exc.failed_rule}) from None
 
+    # ---------------------------------------------------------------- Question_Advisor
+    @app.post("/ops/questions/{question_id}/advise", status_code=202, response_model=Job)
+    def advise_question(question_id: str, body: StartRunRequest | None = None) -> Job:
+        """Ask the Question_Advisor in the background (result: QuestionAdvice). It never answers the question."""
+        s = svc()
+        q = s.pipeline.hitl.get(question_id)
+        if q is None:
+            raise ApiError(404, "NOT_FOUND", f"unknown question {question_id}")
+        if q.status != "open":
+            raise ApiError(409, "CONFLICT", f"question {question_id} is {q.status}")
+        operator = (body or StartRunRequest()).operator
+        return submit("advise", f"advise:{question_id}", "llm", lambda: consult_advisor(s, q, operator),
+                      "agent advice", operator)
+
+    @app.get("/ops/questions/{question_id}/advice", response_model=list[QuestionAdvice])
+    def question_advice(question_id: str) -> list[QuestionAdvice]:
+        return [QuestionAdvice(**_advice_model(r)) for r in svc().pipeline.decision_logger.advice(question_id)]
+
+    @app.get("/ops/advice/latest", response_model=dict[str, QuestionAdvice])
+    def latest_advice() -> dict[str, QuestionAdvice]:
+        rows = svc().pipeline.decision_logger.advice(latest_only=True)
+        return {r["question_id"]: QuestionAdvice(**_advice_model(r)) for r in rows}
+
     # ---------------------------------------------------------------- schema discovery (task 7)
     @app.post("/ops/schema/discover", response_model=SchemaProposal)
     def discover_schema(source: Literal["llm", "reference"] = "llm") -> SchemaProposal:
@@ -425,6 +449,69 @@ def create_app(services: Services | Callable[[], Services] | None = None) -> Fas
 
 class OperatorBody(BaseModel):
     operator: str = Field(min_length=1)
+
+
+# ---------------------------------------------------------------- Question_Advisor wiring
+def advisor_context(s: Services, question) -> AdvisorContext:
+    """Read-only providers of one consultation: group rows, source rows, Legacy B, value validation."""
+    from hitl.validation import validate_value
+    from migration.ingestion import ingest
+    p = s.pipeline
+    cfg = p.config()
+
+    def source_rows():
+        m = p.schema_agent.validated_mapping()
+        mapping = m.mapping if m is not None else dict(cfg.column_mapping.mapping)
+        return ingest(p.deps.source_path, mapping, cfg.column_mapping).rows
+
+    def legacy_b_model(vin: str) -> dict:
+        if s.legacy_b is None:
+            return {"status": "unavailable", "vehicle_model": None}
+        try:
+            t = s.legacy_b.model_reference(vin)
+        except Exception as exc:  # noqa: BLE001 - Legacy B down: the advisor says so
+            return {"status": f"unavailable ({type(exc).__name__})", "vehicle_model": None}
+        if t is None:
+            return {"status": "not_found", "vehicle_model": None}
+        return {"status": "found", "vehicle_model": t.vehicle_model, "updated_on": t.updated_on}
+
+    return AdvisorContext(cfg=cfg, question=question, members=lambda: p.hitl.members(question.question_id),
+                          source_rows=source_rows, legacy_b_model=legacy_b_model,
+                          validate_value=lambda key, value: validate_value(key, value, cfg, p._shared_view()))
+
+
+def consult_advisor(s: Services, question, operator: str | None) -> QuestionAdvice:
+    """Run the Question_Advisor and trace the advice, its tool calls and its tokens in the journal."""
+    import uuid
+    from rules.timeutil import utcnow
+    p = s.pipeline
+    cfg = p.config()
+    advisor = QuestionAdvisor(p.ensure_llm(), cfg.pipeline.advisor_max_turns, cfg.pipeline.advisor_max_tokens)
+    out = advisor.advise(advisor_context(s, question), run_id=question.run_id or "advisor")
+    advice = QuestionAdvice(
+        advice_id=str(uuid.uuid4()), question_id=question.question_id, pattern_key=question.pattern_key,
+        status=out.status, recommendation=out.recommendation, failure=out.failure,
+        tool_calls=[AdviceToolCall(iteration=c.iteration, tool=c.tool, params=c.params(), result_summary=c.summary)
+                    for c in out.tool_calls],
+        llm_calls=out.llm_calls, input_tokens=out.input_tokens, output_tokens=out.output_tokens,
+        seconds=out.seconds, model=out.model, created_at=utcnow())
+    p.decision_logger.write_advice(
+        {"advice_id": advice.advice_id, "question_id": advice.question_id, "pattern_key": advice.pattern_key,
+         "run_id": question.run_id, "status": advice.status,
+         "recommendation": advice.recommendation.model_dump_json() if advice.recommendation else None,
+         "failure": advice.failure, "llm_calls": advice.llm_calls, "input_tokens": advice.input_tokens,
+         "output_tokens": advice.output_tokens, "seconds": advice.seconds, "model": advice.model,
+         "operator": operator, "created_at": advice.created_at},
+        [c.model_dump() for c in advice.tool_calls])
+    return advice
+
+
+def _advice_model(row: dict) -> dict:
+    import json
+    rec = json.loads(row["recommendation"]) if row.get("recommendation") else None
+    return {**{k: row[k] for k in ("advice_id", "question_id", "pattern_key", "status", "failure", "llm_calls",
+                                   "input_tokens", "output_tokens", "seconds", "model", "created_at")},
+            "recommendation": rec, "tool_calls": row.get("tool_calls", [])}
 
 
 app = create_app()

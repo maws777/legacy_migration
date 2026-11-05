@@ -9,6 +9,9 @@ discovery_sample_size: 20
 resolver_auto_apply_fields: [originTool, ecuName, Vehmodel, ecuCode]
 # Resolver_Agent: at most this many LLM turns (tool calls + final answer) per Pattern_Key (max 3).
 resolver_max_iterations: 3
+# Question_Advisor: at most this many LLM turns per consultation (max 4), output tokens per turn.
+advisor_max_turns: 4
+advisor_max_tokens: 400
 llm:
   # provider: ollama (local, default) or anthropic (needs ANTHROPIC_API_KEY).
   # To switch back to Anthropic: provider: anthropic and model: claude-haiku-4-5.

@@ -13,7 +13,7 @@ from sqlalchemy import (
 )
 
 from reporting.schemas import DECISION_FIELDS, DecisionPage, DecisionRecord, LogFilters, ToolCallRecord
-from rules.timeutil import iso_z, naive_utc
+from rules.timeutil import as_utc, iso_z, naive_utc
 from rules.types import ACTIONS, DECIDED_BY, ROW_FIELD, FieldDecision
 
 LOG_MD = MetaData()
@@ -44,6 +44,34 @@ Index("ix_decision_run_action", decision_log.c.run_id, decision_log.c.action)
 Index("ix_decision_run_rule", decision_log.c.run_id, decision_log.c.rule_id)
 Index("uq_decision_row_record", decision_log.c.run_id, decision_log.c.source_row, unique=True,
       sqlite_where=text("field = '_row'"), postgresql_where=text("field = '_row'"))
+
+# Question_Advisor recommendations (never decisions) and their tool calls.
+question_advice = Table(
+    "question_advice", LOG_MD,
+    Column("advice_id", String(36), primary_key=True),
+    Column("question_id", String(36), nullable=False, index=True),
+    Column("pattern_key", Text, nullable=False),
+    Column("run_id", String(36)),
+    Column("status", String(16), nullable=False),
+    Column("recommendation", Text),                 # JSON of agents.question_advisor.Recommendation
+    Column("failure", Text),
+    Column("llm_calls", Integer, nullable=False),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("seconds", Float, nullable=False),
+    Column("model", String(64)),
+    Column("operator", String(128)),
+    Column("created_at", DateTime, nullable=False),
+)
+question_advice_tool_call = Table(
+    "question_advice_tool_call", LOG_MD,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("advice_id", String(36), nullable=False, index=True),
+    Column("iteration", Integer, nullable=False),
+    Column("tool", String(40), nullable=False),
+    Column("params", Text, nullable=False),
+    Column("result_summary", Text, nullable=False),
+)
 
 # Resolver_Agent tool calls of a Run (tool, parameters, summarized result), one row per call.
 decision_tool_call = Table(
@@ -194,6 +222,42 @@ class DecisionLogger:
                 conn.execute(insert(decision_tool_call), rows)
         except Exception as exc:  # noqa: BLE001
             raise DecisionLogError(records[0].run_id, 0, f"tool call log: {type(exc).__name__}") from exc
+
+    # ---------------------------------------------------------------- Question_Advisor
+    def write_advice(self, advice: dict, tool_calls: Sequence[dict]) -> None:
+        """One advice row and its tool calls, in one transaction (``advice`` uses the table columns)."""
+        row = dict(advice)
+        row["created_at"] = naive_utc(row["created_at"])
+        with self.engine.begin() as conn:
+            conn.execute(insert(question_advice).values(**row))
+            if tool_calls:
+                conn.execute(insert(question_advice_tool_call),
+                             [{"advice_id": row["advice_id"], **c} for c in tool_calls])
+
+    def advice(self, question_id: str | None = None, latest_only: bool = False) -> list[dict]:
+        q = select(question_advice).order_by(question_advice.c.created_at.desc())
+        if question_id:
+            q = q.where(question_advice.c.question_id == question_id)
+        with self.engine.connect() as c:
+            rows = [dict(r) for r in c.execute(q).mappings().all()]
+            if latest_only:
+                seen, kept = set(), []
+                for r in rows:
+                    if r["question_id"] not in seen:
+                        seen.add(r["question_id"])
+                        kept.append(r)
+                rows = kept
+            ids = [r["advice_id"] for r in rows]
+            calls = c.execute(select(question_advice_tool_call).where(question_advice_tool_call.c.advice_id.in_(ids))
+                              .order_by(question_advice_tool_call.c.id)).mappings().all() if ids else []
+        by_advice: dict[str, list[dict]] = {}
+        for call in calls:
+            by_advice.setdefault(call["advice_id"], []).append(
+                {k: call[k] for k in ("iteration", "tool", "params", "result_summary")})
+        for r in rows:
+            r["created_at"] = as_utc(r["created_at"])
+            r["tool_calls"] = by_advice.get(r["advice_id"], [])
+        return rows
 
     def tool_calls(self, run_id: str, pattern_key: str | None = None) -> list[ToolCallRecord]:
         q = select(decision_tool_call).where(decision_tool_call.c.run_id == run_id)

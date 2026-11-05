@@ -132,6 +132,8 @@ class PipelineConfig(_Frozen):
     discovery_sample_size: int = Field(20, ge=1)
     resolver_auto_apply_fields: tuple[str, ...] = ("originTool", "ecuName", "Vehmodel", "ecuCode")
     resolver_max_iterations: int = Field(3, ge=1, le=3)
+    advisor_max_turns: int = Field(4, ge=1, le=4)            # Question_Advisor: LLM turns per consultation
+    advisor_max_tokens: int = Field(400, ge=50)              # output tokens per Question_Advisor turn
     llm: LLMConfig
     control_sample: ControlSampleConfig = ControlSampleConfig()
     legacy_b: LegacyBSimConfig = LegacyBSimConfig()

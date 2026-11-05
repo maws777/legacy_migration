@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from agents.jobs import Job
+from agents.question_advisor import QuestionAdvice
 from agents.schemas import (
     ColumnMapping, PhaseStatus, ReconResult, SchemaProposal, SchemaReference, TransitionLogEntry, TransitionResult,
 )
@@ -117,6 +118,14 @@ class OrchestratorClient:
         params = {"pattern_key": pattern_key} if pattern_key else None
         return [ToolCallRecord(**r) for r in self._call("load agent tool calls", "GET",
                                                         f"/ops/runs/{run_id}/tool-calls", params=params)]
+
+    # ---------------------------------------------------------------- Question_Advisor
+    def advise_job(self, question_id: str, operator: str | None) -> Job:
+        return Job(**self._call("ask the agent", "POST", f"/ops/questions/{question_id}/advise", ok=(202,),
+                                json={"operator": operator}))
+
+    def latest_advice(self) -> dict[str, QuestionAdvice]:
+        return {k: QuestionAdvice(**v) for k, v in self._call("load agent advice", "GET", "/ops/advice/latest").items()}
 
     # ---------------------------------------------------------------- questions
     def questions(self, status: str = "open", run_id: str | None = None) -> list[HumanQuestion]:

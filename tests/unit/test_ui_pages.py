@@ -188,3 +188,54 @@ def test_reference_mapping_button():
     button(at, "Utiliser le mapping de référence").click().run()
     assert any("Mapping de référence (Rule_Config)" in m.value for m in at.markdown)
     assert any("Aucune différence" in m.value for m in at.markdown)
+
+
+# ---------------------------------------------------------------- Question_Advisor (part 3)
+def _question():
+    from hitl.schemas import HumanQuestion
+    return HumanQuestion(question_id="q1", run_id="r1", pattern_key="Vehmodel|LEGACY_B_CONFLICT", field="Vehmodel",
+                         reason="LEGACY_B_CONFLICT", rule_id="R7", row_count=2, example_rows=[], missing="m", why="w",
+                         llm_suggestion=None, llm_status="not_applicable", allowed_values=None,
+                         options=["reject_group", "case_by_case"], status="open", parent_question_id=None,
+                         created_at=NOW, closed_at=None)
+
+
+class AdviceApi(FakeApi):
+    def __init__(self, advice=None):
+        super().__init__()
+        self.advice = advice or {}
+        self.asked = []
+
+    def questions(self, status="open", run_id=None):
+        return [_question()]
+
+    def latest_advice(self):
+        return self.advice
+
+    def advise_job(self, question_id, operator):
+        self.asked.append((question_id, operator))
+        j = job("advise", status="queued", key=f"advise:{question_id}", lane="llm", label="agent advice")
+        self.active = [j]
+        return j
+
+
+def test_advise_button_runs_a_job_and_shows_the_advice():
+    from agents.question_advisor import QuestionAdvice
+    api = AdviceApi()
+    at = app(api, page="ui/pages/2_questions.py", operator="ann").run()
+    button(at, "Demander l'avis de l'agent").click().run()
+    assert api.asked == [("q1", "ann")] and button(at, "Demander l'avis de l'agent").disabled
+    assert any("agent advice : en cours" in i.value for i in at.info)
+    api.active = []
+    api.advice = {"q1": QuestionAdvice(
+        advice_id="a1", question_id="q1", pattern_key="Vehmodel|LEGACY_B_CONFLICT", status="recommended",
+        recommendation={"option": "case_by_case", "value": None, "confidence": 0.7, "justification": "two sources",
+                        "evidence": ["Legacy B holds MASTER"], "unknowns": ["which system is right"]},
+        tool_calls=[{"iteration": 1, "tool": "legacy_b_model", "params": "{}", "result_summary": "found"}],
+        llm_calls=2, input_tokens=900, output_tokens=120, seconds=14.2, created_at=NOW)}
+    api.job = lambda job_id: job("advise", status="succeeded", key="advise:q1", label="agent advice", result={})
+    at.run()
+    assert any("Option conseillée : **Case by case**" in s.value for s in at.success)
+    assert any("1,020 tokens" in m.value for m in at.markdown)
+    assert any("which system is right" in m.value for m in at.markdown)
+    assert not button(at, "Demander l'avis de l'agent").disabled
